@@ -4,7 +4,7 @@ members = [
     "cottontail/ct_assetbaker",
     "cottontail/ct_lib",
     "cottontail/ct_makeproject",
-    "bytepath_tutorial",
+    "launcher",
 ]
 
 # NOTE: The following optimizes dependencies (but not workspace members) 

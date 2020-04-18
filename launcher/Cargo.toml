@@ -1,9 +1,9 @@
 [package]
-name = "bytepath_tutorial"
+name = "launcher"
 version = "0.1.0"
 authors = ["Jakob Schwab <j.schwab@mail.de>"]
 edition = "2018"
-default-run = "bytepath_tutorial"
+default-run = "launcher"
 
 [dependencies.ct_lib]
 path = "../cottontail/ct_lib"

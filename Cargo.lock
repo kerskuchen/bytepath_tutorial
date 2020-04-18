@@ -86,14 +86,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
 
 [[package]]
-name = "bytepath_tutorial"
-version = "0.1.0"
-dependencies = [
- "ct_lib",
- "ct_platform",
-]
-
-[[package]]
 name = "caf"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -406,6 +398,14 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "launcher"
+version = "0.1.0"
+dependencies = [
+ "ct_lib",
+ "ct_platform",
+]
 
 [[package]]
 name = "lazy_static"
