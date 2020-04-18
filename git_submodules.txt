@@ -1,0 +1,1 @@
+git submodule add -b master https://github.com/kerskuchen/cottontail.git
