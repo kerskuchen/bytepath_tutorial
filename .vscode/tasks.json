@@ -10,11 +10,11 @@
             "args": [
                 "run",
                 "-p",
-                "bytepath_tutorial",
+                "launcher"
             ],
             "problemMatcher": [
                 "$rustc"
-            ],
+            ]
         },
         {
             "type": "shell",
@@ -27,25 +27,25 @@
             ],
             "problemMatcher": [
                 "$rustc"
-            ],
+            ]
         },
         {
             "type": "shell",
             "label": "check",
             "command": "cargo",
             "args": [
-                "check",
+                "check"
             ],
             "problemMatcher": [
                 "$rustc"
-            ],
+            ]
         },
         {
             "type": "shell",
             "label": "clippy",
             "command": "cargo",
             "args": [
-                "clippy",
+                "clippy"
             ],
             "problemMatcher": [
                 "$rustc"
@@ -56,11 +56,11 @@
             "label": "build",
             "command": "cargo",
             "args": [
-                "build",
+                "build"
             ],
             "problemMatcher": [
                 "$rustc"
             ]
-        },
+        }
     ]
 }

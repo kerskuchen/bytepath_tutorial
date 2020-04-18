@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'bytepath_tutorial'",
+            "name": "Debug executable 'launcher'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=bytepath_tutorial",
-                    "--package=bytepath_tutorial",
+                    "--bin=launcher",
+                    "--package=launcher"
                 ],
                 "filter": {
-                    "name": "bytepath_tutorial",
+                    "name": "launcher",
                     "kind": "bin"
                 }
             },
