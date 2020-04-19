@@ -9,8 +9,8 @@ mkdir shipping_windows
 IF EXIST temp rmdir /s /q temp
 mkdir temp
 
-cargo build --release
-cargo run --release --package ct_assetbaker
+cargo run --package ct_assetbaker && ^
+cargo build --release --package launcher
 
 magick convert assets_executable/launcher_icon/512.png -resize 256x256 temp/256.png
 magick convert assets_executable/launcher_icon/512.png -resize 128x128 temp/128.png
