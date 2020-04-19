@@ -143,9 +143,9 @@ dependencies = [
 
 [[package]]
 name = "cmdline_words_parser"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f82d4d9b75a0a6f8423e5d2b4572f35da7fe3fb196df01b335a4a66342109ea"
+checksum = "75d8078f03daf673d8bd34a1ef48c680ea4a895204882ce5f0ccfb2487b2bd29"
 
 [[package]]
 name = "crossbeam-deque"
@@ -259,13 +259,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "easy_process"
-version = "0.1.6"
+name = "derive_more"
+version = "0.99.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db39385265f3de33862f28207dbd290440547353ec0ea8175efc94867b949a4d"
+checksum = "e2323f3f47db9a0e77ce7a300605d8d2098597fc451ed1a97bb1f6411bb550a7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "easy_process"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46f523b9f68c430f962e03160b7375c7960ec914e62ab19ce6f0982ff867d342"
 dependencies = [
  "checked_command",
  "cmdline_words_parser",
+ "derive_more",
 ]
 
 [[package]]
