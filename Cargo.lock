@@ -201,15 +201,11 @@ dependencies = [
 name = "ct_assetbaker"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "ct_lib",
  "fern 0.6.0",
  "ico",
- "log 0.4.8",
  "rayon",
  "serde",
- "serde_derive",
- "serde_json",
 ]
 
 [[package]]
@@ -243,11 +239,7 @@ dependencies = [
  "chrono",
  "ct_lib",
  "heck",
- "indexmap",
  "mustache",
- "serde",
- "serde_derive",
- "serde_json",
 ]
 
 [[package]]
@@ -258,7 +250,6 @@ dependencies = [
  "ct_lib",
  "fern 0.5.9",
  "glow",
- "log 0.4.8",
  "sdl2",
 ]
 
