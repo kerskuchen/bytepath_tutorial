@@ -11,24 +11,32 @@ mkdir temp
 
 cargo run --package ct_assetbaker && ^
 cargo build --release --package launcher
+if %errorlevel% neq 0 goto :error
 
-magick convert assets_executable/launcher_icon/512.png -resize 256x256 temp/256.png
-magick convert assets_executable/launcher_icon/512.png -resize 128x128 temp/128.png
-magick convert assets_executable/launcher_icon/512.png -resize 64x64 temp/64.png
-magick convert assets_executable/launcher_icon/512.png -resize 48x48 temp/48.png
-magick convert assets_executable/launcher_icon/512.png -resize 32x32 temp/32.png
-magick convert assets_executable/launcher_icon/512.png -resize 16x16 temp/16.png
+ResourceHacker.exe -log temp/log1.txt -open resources_executable/versioninfo.rc -save temp/versioninfo.res -action compile 
+if %errorlevel% neq 0 goto :error
+ResourceHacker.exe -log temp/log2.txt -open target/release/launcher.exe -save temp/launcher_tmp1.exe -action add -res temp/versioninfo.res 
+if %errorlevel% neq 0 goto :error
+ResourceHacker.exe -log temp/log3.txt -open temp/launcher_tmp1.exe -save temp/launcher_tmp2.exe -action add -res resources_executable/launcher.ico -mask ICONGROUP,MAINICON,  
+if %errorlevel% neq 0 goto :error
 
-REM NOTE: This also works beautifully for transparent pngs
-magick convert temp/16.png temp/32.png temp/48.png temp/64.png temp/128.png temp/256.png temp/icon.ico
+copy ".\temp\launcher_tmp2.exe" ".\shipping_windows\bytepath_tutorial.exe" > nul
+if %errorlevel% neq 0 goto :error
 
-ResourceHacker.exe -open assets_executable/versioninfo.rc -save temp/versioninfo.res -action compile 
-ResourceHacker.exe -open target/release/launcher.exe -save temp/launcher_tmp1.exe -action add -res temp/versioninfo.res 
-ResourceHacker.exe -open temp/launcher_tmp1.exe -save temp/launcher_tmp2.exe -action add -res temp/icon.ico -mask ICONGROUP,MAINICON, 
+REM NOTE: robocopy has success error code 1
+robocopy "resources" "shipping_windows\resources" /s /e > nul
+if %errorlevel% neq 1 goto :error
 
-copy ".\temp\launcher_tmp2.exe" ".\shipping_windows\bytepath_tutorial.exe"
-robocopy "resources" "shipping_windows\resources" /s /e 
-
+REM NOTE: rmdir has success error code 1
 rmdir /s /q "temp"
+if %errorlevel% neq 1 goto :error
 
+goto :done
+
+:error
+echo Failed with error #%errorlevel%.
 pause
+exit /b %errorlevel%
+
+:done
+echo FINISHED BUILDING WINDOWS SHIPPING
