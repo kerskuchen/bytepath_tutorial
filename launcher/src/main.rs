@@ -5,6 +5,14 @@ use ct_lib::math::*;
 use ct_lib::random::*;
 use ct_platform;
 
+use stage::SceneStage;
+//use console::SceneConsole;
+//use skilltree::SceneSkilltree;
+
+mod console;
+mod skilltree;
+mod stage;
+
 const CANVAS_WIDTH: f32 = 480.0;
 const CANVAS_HEIGHT: f32 = 270.0;
 
@@ -30,7 +38,11 @@ const WINDOW_CONFIG: WindowConfig = WindowConfig {
 pub struct GameState {
     globals: Globals,
     debug_deltatime_factor: f32,
+
     scene_debug: SceneDebug,
+    scene_stage: SceneStage,
+    // scene_console: SceneConsole,
+    // scene_skilltree: SceneSkilltree,
 }
 
 impl GameStateInterface for GameState {
@@ -67,7 +79,7 @@ impl GameStateInterface for GameState {
         let font_default = draw.get_font("default_tiny_bordered");
         let font_default_no_border = draw.get_font("default_tiny");
 
-        let globals = Globals {
+        let mut globals = Globals {
             random,
             camera,
             cursors,
@@ -84,12 +96,18 @@ impl GameStateInterface for GameState {
         };
 
         let scene_debug = SceneDebug::new(draw, audio, assets, input, "Grand9K_Pixel_bordered");
+        let scene_stage = SceneStage::new(draw, audio, assets, input, &mut globals);
+        // let scene_console = SceneConsole::new();
+        // let scene_skilltree = SceneSkilltree::new();
 
         GameState {
             globals,
 
             debug_deltatime_factor: 1.0,
             scene_debug,
+            scene_stage,
+            // scene_console,
+            // scene_skilltree,
         }
     }
 
@@ -148,7 +166,9 @@ impl GameStateInterface for GameState {
             &mouse_coords,
         );
 
-        self.scene_debug
+        //self.scene_debug
+        //    .update_and_draw(draw, audio, assets, input, &mut self.globals);
+        self.scene_stage
             .update_and_draw(draw, audio, assets, input, &mut self.globals);
 
         let deltatime = self.globals.deltatime;
