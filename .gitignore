@@ -7,4 +7,6 @@ target/
 shipping_windows/
 
 logging.txt
+launcher_config.json
+
 project_details_local.json
