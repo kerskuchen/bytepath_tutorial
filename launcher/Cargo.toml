@@ -5,6 +5,10 @@ authors = ["Jakob Schwab <j.schwab@mail.de>"]
 edition = "2018"
 default-run = "launcher"
 
+[[bin]]
+path = "src/main_launcher.rs"
+name = "launcher"
+
 [dependencies.ct_lib]
 path = "../cottontail/ct_lib"
 
