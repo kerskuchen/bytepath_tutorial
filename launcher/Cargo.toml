@@ -16,3 +16,4 @@ path = "../cottontail/ct_lib"
 path = "../cottontail/ct_platform"
 
 [dependencies]
+hecs = "0.2"
