@@ -1026,37 +1026,39 @@ impl Scene for SceneStage {
                 ammo_motion.vel = ammo_motion.vel.magnitude() * dir_final;
             }
 
-            let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height)
-                .extended_uniformly_by(ammo.width);
+            // Check if entity needs to be removed from game
+            let mut remove_self = false;
+            let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
             if !canvas_rect.contains_point(ammo_xform.pos) {
-                self.commands.remove_entity(ammo_entity);
+                remove_self = true;
             }
-
             if self.world.contains(ammo.move_target) {
                 let player_xform = self.world.get::<Transform>(ammo.move_target).unwrap();
-
                 if Vec2::distance_squared(player_xform.pos, ammo_xform.pos) < squared(ammo.width) {
-                    self.commands.remove_entity(ammo_entity);
+                    remove_self = true;
+                }
+            }
 
-                    self.commands.add_entity(Archetypes::new_hit_effect(
+            if remove_self {
+                self.commands.remove_entity(ammo_entity);
+                self.commands.add_entity(Archetypes::new_hit_effect(
+                    ammo_xform.pos,
+                    ammo.width,
+                    45.0,
+                    COLOR_DEFAULT,
+                    COLOR_AMMO,
+                ));
+
+                for _ in 0..globals.random.gen_range(4, 8) {
+                    self.commands.add_entity(Archetypes::new_explode_particle(
                         ammo_xform.pos,
-                        ammo.width,
-                        45.0,
-                        COLOR_DEFAULT,
+                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                        globals.random.f32_in_range_closed(50.0, 100.0),
+                        globals.random.f32_in_range_closed(1.0, 2.0),
+                        globals.random.f32_in_range_closed(3.0, 8.0),
+                        globals.random.f32_in_range_closed(0.3, 0.5),
                         COLOR_AMMO,
                     ));
-
-                    for _ in 0..globals.random.gen_range(4, 8) {
-                        self.commands.add_entity(Archetypes::new_explode_particle(
-                            ammo_xform.pos,
-                            rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                            globals.random.f32_in_range_closed(50.0, 100.0),
-                            globals.random.f32_in_range_closed(1.0, 2.0),
-                            globals.random.f32_in_range_closed(3.0, 8.0),
-                            globals.random.f32_in_range_closed(0.3, 0.5),
-                            COLOR_AMMO,
-                        ));
-                    }
                 }
             }
         }
