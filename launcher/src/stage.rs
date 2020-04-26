@@ -215,7 +215,7 @@ impl Archetypes {
         dir_angle: f32,
         color_first_stage: Color,
         color_second_stage: Color,
-    ) -> (Transform, HitEffect) {
+    ) -> (Transform, HitEffect, Drawable) {
         (
             Transform { pos, dir_angle },
             HitEffect {
@@ -223,6 +223,20 @@ impl Archetypes {
                 size,
                 color_first_stage,
                 color_second_stage,
+            },
+            Drawable {
+                mesh: MeshType::RectangleTransformed {
+                    width: size,
+                    height: size,
+                    filled: true,
+                    centered: true,
+                },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                color: color_first_stage,
+                additivity: ADDITIVITY_NONE,
+                depth: DEPTH_EFFECTS,
+                add_jitter: false,
             },
         )
     }
@@ -981,30 +995,20 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE HIT EFFECTS
-        for (effect_entity, (effect_xform, effect)) in
-            &mut self.world.query::<(&Transform, &mut HitEffect)>()
+        for (effect_entity, (effect, drawable)) in
+            &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
         {
             effect.timer_stages.update(deltatime);
+            if effect.timer_stages.is_finished() {
+                self.commands.remove_entity(effect_entity);
+            }
+
             let color = if effect.timer_stages.time_cur < 0.1 {
                 effect.color_first_stage
             } else {
                 effect.color_second_stage
             };
-
-            draw.draw_rect_transformed(
-                Vec2::filled(effect.size),
-                Vec2::filled(effect.size / 2.0),
-                effect_xform.pos,
-                Vec2::ones(),
-                Vec2::from_angle_flipped_y(deg_to_rad(effect_xform.dir_angle)),
-                DEPTH_EFFECTS,
-                color,
-                ADDITIVITY_NONE,
-            );
-
-            if effect.timer_stages.is_finished() {
-                self.commands.remove_entity(effect_entity);
-            }
+            drawable.color = color;
         }
 
         //------------------------------------------------------------------------------------------
