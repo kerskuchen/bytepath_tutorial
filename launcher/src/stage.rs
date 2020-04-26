@@ -220,7 +220,7 @@ impl Archetypes {
         dir_angle: f32,
         dir_angle_vel: f32,
         player_entity: Entity,
-    ) -> (Transform, Motion, Ammo, Drawable) {
+    ) -> (Transform, Motion, Ammo, TurnTowardsTarget, Drawable) {
         let size = 8.0;
         (
             Transform { pos, dir_angle },
@@ -231,12 +231,14 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Ammo {
-                move_target: player_entity,
-
                 width: size,
                 height: size,
 
                 color: COLOR_AMMO,
+            },
+            TurnTowardsTarget {
+                target: player_entity,
+                follow_precision_percent: 0.1,
             },
             Drawable {
                 mesh: MeshType::RectangleTransformed {
@@ -404,6 +406,12 @@ struct SnapToParent {
 }
 
 #[derive(Debug, Copy, Clone)]
+struct TurnTowardsTarget {
+    pub target: Entity,
+    pub follow_precision_percent: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
 struct Player {
     pub timer_tick: TriggerRepeating,
     pub timer_trail_particles: TriggerRepeating,
@@ -438,8 +446,6 @@ struct Player {
 
 #[derive(Debug, Copy, Clone)]
 struct Ammo {
-    pub move_target: Entity,
-
     pub width: f32,
     pub height: f32,
 
@@ -729,56 +735,6 @@ impl Scene for SceneStage {
         let deltatime = globals.deltatime;
 
         //------------------------------------------------------------------------------------------
-        // UPDATE POSITIONS
-
-        for (_entity, (xform, motion)) in &mut self.world.query::<(&mut Transform, &Motion)>() {
-            xform.pos += motion.vel * deltatime;
-            xform.dir_angle += motion.dir_angle_vel * deltatime;
-            if xform.dir_angle > 360.0 {
-                xform.dir_angle -= 360.0;
-            }
-            if xform.dir_angle < -360.0 {
-                xform.dir_angle += 360.0;
-            }
-        }
-
-        for (_entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
-            if self.world.contains(snap.parent) {
-                let parent_xform = self.world.get::<Transform>(snap.parent).unwrap();
-                if snap.pos_snap && snap.dir_angle_snap {
-                    xform.pos = parent_xform.pos
-                        + snap
-                            .pos_offset
-                            .rotated_flipped_y(deg_to_rad(parent_xform.dir_angle));
-                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
-                } else if snap.pos_snap {
-                    xform.pos = parent_xform.pos + snap.pos_offset;
-                } else if snap.dir_angle_snap {
-                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
-                }
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN AMMO
-
-        if input.keyboard.recently_pressed(Scancode::A) {
-            if let Some(player_entity) = self.player {
-                self.world.spawn(Archetypes::new_ammo(
-                    globals.random.vec2_in_rect(Rect::from_width_height(
-                        globals.canvas_width,
-                        globals.canvas_height,
-                    )),
-                    globals.random.vec2_in_unit_disk()
-                        * globals.random.f32_in_range_closed(10.0, 20.0),
-                    globals.random.f32_in_range_closed(0.0, 360.0),
-                    globals.random.f32_in_range_closed(-360.0, 360.0),
-                    player_entity,
-                ));
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
         // UPDATE SLOWMOTION
 
         for (slowmotion_entity, slowmotion) in &mut self.world.query::<&mut SlowMotion>() {
@@ -799,6 +755,79 @@ impl Scene for SceneStage {
                 flash.framecount_duration -= 1;
             } else {
                 self.commands.remove_entity(flash_entity);
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // UPDATE POSITIONS
+
+        // MOTION
+        for (_entity, (xform, motion)) in &mut self.world.query::<(&mut Transform, &Motion)>() {
+            xform.pos += motion.vel * deltatime;
+            xform.dir_angle += motion.dir_angle_vel * deltatime;
+            if xform.dir_angle > 360.0 {
+                xform.dir_angle -= 360.0;
+            }
+            if xform.dir_angle < -360.0 {
+                xform.dir_angle += 360.0;
+            }
+        }
+
+        // SNAPPING
+        for (_entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
+            if self.world.contains(snap.parent) {
+                let parent_xform = self.world.get::<Transform>(snap.parent).unwrap();
+                if snap.pos_snap && snap.dir_angle_snap {
+                    xform.pos = parent_xform.pos
+                        + snap
+                            .pos_offset
+                            .rotated_flipped_y(deg_to_rad(parent_xform.dir_angle));
+                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
+                } else if snap.pos_snap {
+                    xform.pos = parent_xform.pos + snap.pos_offset;
+                } else if snap.dir_angle_snap {
+                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
+                }
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // STEERING
+
+        // TURNING TOWARDS TARGET
+        for (_entity, (xform, motion, follow)) in
+            &mut self
+                .world
+                .query::<(&Transform, &mut Motion, &TurnTowardsTarget)>()
+        {
+            if self.world.contains(follow.target) {
+                let target_xform = self.world.get::<Transform>(follow.target).unwrap();
+
+                let dir_current = motion.vel.normalized();
+                let dir_target = (target_xform.pos - xform.pos).normalized();
+                let dir_final =
+                    Vec2::lerp(dir_current, dir_target, follow.follow_precision_percent)
+                        .normalized();
+                motion.vel = motion.vel.magnitude() * dir_final;
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // SPAWN AMMO
+
+        if input.keyboard.recently_pressed(Scancode::A) {
+            if let Some(player_entity) = self.player {
+                self.world.spawn(Archetypes::new_ammo(
+                    globals.random.vec2_in_rect(Rect::from_width_height(
+                        globals.canvas_width,
+                        globals.canvas_height,
+                    )),
+                    globals.random.vec2_in_unit_disk()
+                        * globals.random.f32_in_range_closed(10.0, 20.0),
+                    globals.random.f32_in_range_closed(0.0, 360.0),
+                    globals.random.f32_in_range_closed(-360.0, 360.0),
+                    player_entity,
+                ));
             }
         }
 
@@ -1059,6 +1088,7 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE HIT EFFECTS
+
         for (effect_entity, (effect, drawable)) in
             &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
         {
@@ -1078,26 +1108,18 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
-        for (ammo_entity, (ammo_xform, ammo_motion, ammo)) in
-            &mut self.world.query::<(&Transform, &mut Motion, &mut Ammo)>()
+        for (ammo_entity, (ammo_xform, ammo_motion, ammo, turn_to_target)) in &mut self
+            .world
+            .query::<(&Transform, &mut Motion, &mut Ammo, &TurnTowardsTarget)>()
         {
-            if self.world.contains(ammo.move_target) {
-                let player_xform = self.world.get::<Transform>(ammo.move_target).unwrap();
-
-                let dir_current = ammo_motion.vel.normalized();
-                let dir_target = (player_xform.pos - ammo_xform.pos).normalized();
-                let dir_final = Vec2::lerp(dir_current, dir_target, 0.1).normalized();
-                ammo_motion.vel = ammo_motion.vel.magnitude() * dir_final;
-            }
-
             // Check if entity needs to be removed from game
             let mut remove_self = false;
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
             if !canvas_rect.contains_point(ammo_xform.pos) {
                 remove_self = true;
             }
-            if self.world.contains(ammo.move_target) {
-                let player_xform = self.world.get::<Transform>(ammo.move_target).unwrap();
+            if self.world.contains(turn_to_target.target) {
+                let player_xform = self.world.get::<Transform>(turn_to_target.target).unwrap();
                 if Vec2::distance_squared(player_xform.pos, ammo_xform.pos) < squared(ammo.width) {
                     remove_self = true;
                 }
@@ -1129,6 +1151,7 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // DRAWING
+
         for (_entity, (xform, drawable)) in &mut self.world.query::<(&Transform, &Drawable)>() {
             let pos = xform.pos;
             let scale = drawable.scale;
