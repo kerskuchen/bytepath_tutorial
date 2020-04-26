@@ -152,7 +152,8 @@ impl Archetypes {
         )
     }
 
-    pub fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile) {
+    pub fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, Drawable) {
+        let projectile_size = 2.5;
         (
             Transform {
                 pos,
@@ -164,7 +165,21 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Projectile { size: 2.5 },
+            Projectile {
+                size: projectile_size,
+            },
+            Drawable {
+                mesh: MeshType::Circle {
+                    radius: projectile_size,
+                    filled: false,
+                },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                add_jitter: false,
+                depth: DEPTH_PROJECTILE,
+                color: COLOR_DEFAULT,
+                additivity: ADDITIVITY_NONE,
+            },
         )
     }
 
@@ -448,9 +463,9 @@ struct Drawable {
     mesh: MeshType,
     pos_offset: Vec2,
     scale: Vec2,
+    depth: Depth,
     color: Color,
     additivity: Additivity,
-    depth: Depth,
     add_jitter: bool,
 }
 
@@ -971,14 +986,6 @@ impl Scene for SceneStage {
         for (projectile_entity, (projectile_xform, projectile)) in
             &mut self.world.query::<(&Transform, &mut Projectile)>()
         {
-            draw.draw_circle_bresenham(
-                projectile_xform.pos,
-                projectile.size,
-                DEPTH_PROJECTILE,
-                Color::white(),
-                ADDITIVITY_NONE,
-            );
-
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
             if !canvas_rect.contains_point(projectile_xform.pos) {
                 self.commands.remove_entity(projectile_entity);
@@ -1078,10 +1085,12 @@ impl Scene for SceneStage {
                     if drawable.add_jitter {
                         todo!();
                     }
+                    if scale.x != scale.y {
+                        todo!();
+                    }
                     if *filled {
-                        if scale.x != scale.y {
-                            todo!();
-                        }
+                        todo!();
+                    } else {
                         draw.draw_circle_bresenham(
                             xform.pos,
                             scale.x * *radius,
@@ -1089,8 +1098,6 @@ impl Scene for SceneStage {
                             color,
                             additivity,
                         );
-                    } else {
-                        todo!();
                     }
                 }
                 MeshType::Rectangle {
