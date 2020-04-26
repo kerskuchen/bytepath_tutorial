@@ -6,6 +6,8 @@ use ct_lib::random::*;
 
 use hecs::*;
 
+use std::collections::HashSet;
+
 const DEPTH_BACKGROUND: Depth = 0.0;
 const DEPTH_PLAYER: Depth = 10.0;
 const DEPTH_PROJECTILE: Depth = 20.0;
@@ -21,13 +23,223 @@ const COLOR_BOOST: Color = Color::from_rgb(76.0 / 255.0, 195.0 / 255.0, 217.0 / 
 const COLOR_HP: Color = Color::from_rgb(241.0 / 255.0, 103.0 / 255.0, 69.0 / 255.0);
 const COLOR_SKILL_POINT: Color = Color::from_rgb(255.0 / 255.0, 198.0 / 255.0, 93.0 / 255.0);
 
+type CollisionMask = u64;
+const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
+const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Components
+
+#[derive(Debug, Clone)]
+struct Collider {
+    radius: f32,
+
+    layers_own: CollisionMask,
+    layers_affects: CollisionMask,
+
+    collisions: Vec<Entity>,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Transform {
+    pub pos: Vec2,
+    /// Given in degrees [-360, 360] counterclockwise
+    pub dir_angle: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Motion {
+    pub vel: Vec2,
+    pub acc: Vec2,
+
+    /// Given in degrees [-360, 360] counterclockwise
+    pub dir_angle_vel: f32,
+    /// Given in degrees [-360, 360] counterclockwise
+    pub dir_angle_acc: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct SnapToParent {
+    pub parent: Entity,
+
+    pub pos_snap: bool,
+    pub pos_offset: Vec2,
+
+    pub dir_angle_snap: bool,
+    pub dir_angle_offset: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct TurnTowardsTarget {
+    pub target: Entity,
+    pub follow_precision_percent: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Player {
+    pub timer_tick: TriggerRepeating,
+    pub timer_trail_particles: TriggerRepeating,
+
+    pub ship_type: ShipType,
+
+    pub speed: f32,
+    pub speed_max: f32,
+    pub speed_base_max: f32,
+    pub acc: f32,
+
+    pub turn_speed: f32,
+
+    pub width: f32,
+    pub height: f32,
+
+    pub attack_timer: TriggerRepeating,
+    pub attack_speed: f32,
+
+    pub hp: f32,
+    pub hp_max: f32,
+
+    pub ammo: f32,
+    pub ammo_max: f32,
+
+    pub boost: f32,
+    pub boost_max: f32,
+    pub boost_cooldown: f32,
+    pub boost_allowed: bool,
+    pub boost_timer: TimerSimple,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Ammo {
+    pub size: f32,
+    pub color: Color,
+    pub ammo_amount: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct SlowMotion {
+    pub timer_tween: TimerSimple,
+    pub deltatime_speed_factor: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Screenflash {
+    pub framecount_duration: usize,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct TickEffect {
+    pub timer_tween: TimerSimple,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Muzzleflash {
+    pub timer_tween: TimerSimple,
+    pub size: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Projectile {
+    pub size: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct HitEffect {
+    pub timer_stages: TimerSimple,
+    pub size: f32,
+    pub color_first_stage: Color,
+    pub color_second_stage: Color,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct ExplodeParticle {
+    pub timer_tween: TimerSimple,
+    pub thickness: f32,
+    pub length: f32,
+    pub speed: f32,
+    pub color: Color,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct TrailParticle {
+    pub timer_tween: TimerSimple,
+    pub size: f32,
+    pub color: Color,
+}
+
+#[derive(Debug, Clone)]
+enum MeshType {
+    Circle {
+        radius: f32,
+        filled: bool,
+    },
+    Rectangle {
+        width: f32,
+        height: f32,
+        filled: bool,
+        centered: bool,
+    },
+    RectangleTransformed {
+        width: f32,
+        height: f32,
+        filled: bool,
+        centered: bool,
+    },
+    LineWithThickness {
+        start: Vec2,
+        end: Vec2,
+        thickness: f32,
+        smooth_edges: bool,
+    },
+    Linestrip(Vec<Vec<(i32, i32)>>),
+}
+
+#[derive(Debug, Clone)]
+struct Drawable {
+    mesh: MeshType,
+    pos_offset: Vec2,
+    scale: Vec2,
+    depth: Depth,
+    color: Color,
+    additivity: Additivity,
+    add_jitter: bool,
+}
+
+fn linestrip_transform<CoordType>(
+    linestrip: &[CoordType],
+    pos: Vec2,
+    pivot: Vec2,
+    scale: Vec2,
+    dir: Vec2,
+    jitter: Option<&mut Random>,
+) -> Vec<Vec2>
+where
+    CoordType: Into<Vec2> + Copy + Clone,
+{
+    if let Some(random) = jitter {
+        linestrip
+            .iter()
+            .map(|&point| {
+                random.vec2_in_unit_rect()
+                    + Vec2::from(point.into()).transformed(pivot, pos, scale, dir)
+            })
+            .collect()
+    } else {
+        linestrip
+            .iter()
+            .map(|&point| Vec2::from(point.into()).transformed(pivot, pos, scale, dir))
+            .collect()
+    }
+}
 
 struct Archetypes {}
 
 impl Archetypes {
-    fn new_player(pos: Vec2, ship_type: ShipType) -> (Transform, Motion, Drawable, Player) {
+    fn new_player(
+        pos: Vec2,
+        ship_type: ShipType,
+    ) -> (Transform, Motion, Drawable, Player, Collider) {
         let player_size = 12.0;
         (
             Transform {
@@ -79,6 +291,13 @@ impl Archetypes {
                 boost_cooldown: 2.0,
                 boost_allowed: true,
                 boost_timer: TimerSimple::new_stopped(1.0),
+            },
+            Collider {
+                radius: player_size,
+                layers_own: COLLISION_LAYER_PLAYER,
+                layers_affects: COLLISION_LAYER_COLLECTIBLES,
+
+                collisions: Vec::with_capacity(32),
             },
         )
     }
@@ -219,7 +438,14 @@ impl Archetypes {
         dir_angle: f32,
         dir_angle_vel: f32,
         player_entity: Entity,
-    ) -> (Transform, Motion, Ammo, TurnTowardsTarget, Drawable) {
+    ) -> (
+        Transform,
+        Motion,
+        Ammo,
+        TurnTowardsTarget,
+        Collider,
+        Drawable,
+    ) {
         let size = 8.0;
         (
             Transform { pos, dir_angle },
@@ -232,10 +458,17 @@ impl Archetypes {
             Ammo {
                 size,
                 color: COLOR_AMMO,
+                ammo_amount: 5.0,
             },
             TurnTowardsTarget {
                 target: player_entity,
                 follow_precision_percent: 0.1,
+            },
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
             },
             Drawable {
                 mesh: MeshType::RectangleTransformed {
@@ -366,229 +599,51 @@ impl Archetypes {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// World command buffer
+
+struct WorldCommandBuffer {
+    commands: Vec<Box<dyn FnOnce(&mut World) + Send + Sync>>,
+}
+
+impl WorldCommandBuffer {
+    fn new() -> WorldCommandBuffer {
+        WorldCommandBuffer {
+            commands: Vec::new(),
+        }
+    }
+
+    fn add_entity<ComponentsBundleType>(&mut self, components: ComponentsBundleType)
+    where
+        ComponentsBundleType: hecs::DynamicBundle + Send + Sync + 'static,
+    {
+        self.commands.push(Box::new(move |world| {
+            world.spawn(components);
+        }));
+    }
+
+    fn remove_entity(&mut self, entity: Entity) {
+        self.commands.push(Box::new(move |world| {
+            world.despawn(entity).ok();
+        }));
+    }
+
+    fn execute(&mut self, world: &mut World) {
+        for command in self.commands.drain(..) {
+            command(world);
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Ship types
+
 #[derive(Debug, Copy, Clone)]
 enum ShipType {
     Fighter,
     Sorcerer,
     Rogue,
 }
-
-#[derive(Debug, Copy, Clone)]
-struct Transform {
-    pub pos: Vec2,
-    /// Given in degrees [-360, 360] counterclockwise
-    pub dir_angle: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Motion {
-    pub vel: Vec2,
-    pub acc: Vec2,
-
-    /// Given in degrees [-360, 360] counterclockwise
-    pub dir_angle_vel: f32,
-    /// Given in degrees [-360, 360] counterclockwise
-    pub dir_angle_acc: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct SnapToParent {
-    pub parent: Entity,
-
-    pub pos_snap: bool,
-    pub pos_offset: Vec2,
-
-    pub dir_angle_snap: bool,
-    pub dir_angle_offset: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct TurnTowardsTarget {
-    pub target: Entity,
-    pub follow_precision_percent: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Player {
-    pub timer_tick: TriggerRepeating,
-    pub timer_trail_particles: TriggerRepeating,
-
-    pub ship_type: ShipType,
-
-    pub speed: f32,
-    pub speed_max: f32,
-    pub speed_base_max: f32,
-    pub acc: f32,
-
-    pub turn_speed: f32,
-
-    pub width: f32,
-    pub height: f32,
-
-    pub attack_timer: TriggerRepeating,
-    pub attack_speed: f32,
-
-    pub hp: f32,
-    pub hp_max: f32,
-
-    pub ammo: f32,
-    pub ammo_max: f32,
-
-    pub boost: f32,
-    pub boost_max: f32,
-    pub boost_cooldown: f32,
-    pub boost_allowed: bool,
-    pub boost_timer: TimerSimple,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Ammo {
-    pub size: f32,
-    pub color: Color,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct SlowMotion {
-    pub timer_tween: TimerSimple,
-    pub deltatime_speed_factor: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Screenflash {
-    pub framecount_duration: usize,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct TickEffect {
-    pub timer_tween: TimerSimple,
-    pub width: f32,
-    pub height: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Muzzleflash {
-    pub timer_tween: TimerSimple,
-    pub size: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Projectile {
-    pub size: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct HitEffect {
-    pub timer_stages: TimerSimple,
-    pub size: f32,
-    pub color_first_stage: Color,
-    pub color_second_stage: Color,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct ExplodeParticle {
-    pub timer_tween: TimerSimple,
-    pub thickness: f32,
-    pub length: f32,
-    pub speed: f32,
-    pub color: Color,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct TrailParticle {
-    pub timer_tween: TimerSimple,
-    pub size: f32,
-    pub color: Color,
-}
-
-#[derive(Debug, Clone)]
-enum MeshType {
-    Circle {
-        radius: f32,
-        filled: bool,
-    },
-    Rectangle {
-        width: f32,
-        height: f32,
-        filled: bool,
-        centered: bool,
-    },
-    RectangleTransformed {
-        width: f32,
-        height: f32,
-        filled: bool,
-        centered: bool,
-    },
-    LineWithThickness {
-        start: Vec2,
-        end: Vec2,
-        thickness: f32,
-        smooth_edges: bool,
-    },
-    Linestrip(Vec<Vec<(i32, i32)>>),
-}
-
-#[derive(Debug, Clone)]
-struct Drawable {
-    mesh: MeshType,
-    pos_offset: Vec2,
-    scale: Vec2,
-    depth: Depth,
-    color: Color,
-    additivity: Additivity,
-    add_jitter: bool,
-}
-
-fn linestrip_transform<CoordType>(
-    linestrip: &[CoordType],
-    pos: Vec2,
-    pivot: Vec2,
-    scale: Vec2,
-    dir: Vec2,
-    jitter: Option<&mut Random>,
-) -> Vec<Vec2>
-where
-    CoordType: Into<Vec2> + Copy + Clone,
-{
-    if let Some(random) = jitter {
-        linestrip
-            .iter()
-            .map(|&point| {
-                random.vec2_in_unit_rect()
-                    + Vec2::from(point.into()).transformed(pivot, pos, scale, dir)
-            })
-            .collect()
-    } else {
-        linestrip
-            .iter()
-            .map(|&point| Vec2::from(point.into()).transformed(pivot, pos, scale, dir))
-            .collect()
-    }
-}
-
-/*
-fn linestrip_transform(
-    linestrip: &[(i32, i32)],
-    pos: Vec2,
-    pivot: Vec2,
-    scale: Vec2,
-    dir: Vec2,
-    jitter: Option<&mut Random>,
-) -> Vec<Vec2> {
-    if let Some(random) = jitter {
-        linestrip
-            .iter()
-            .map(|&point| {
-                random.vec2_in_unit_rect() + Vec2::from(point).transformed(pivot, pos, scale, dir)
-            })
-            .collect()
-    } else {
-        linestrip
-            .iter()
-            .map(|&point| Vec2::from(point).transformed(pivot, pos, scale, dir))
-            .collect()
-    }
-}
-*/
 
 fn get_draw_lines_for_ship(ship_type: ShipType) -> Vec<Vec<(i32, i32)>> {
     match ship_type {
@@ -636,42 +691,6 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
         ShipType::Fighter => vec![(-3, -1), (-3, 1)],
         ShipType::Rogue => vec![(-3, -2), (-3, 2)],
         ShipType::Sorcerer => vec![(-4, 0)],
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// World command buffer
-
-struct WorldCommandBuffer {
-    commands: Vec<Box<dyn FnOnce(&mut World) + Send + Sync>>,
-}
-
-impl WorldCommandBuffer {
-    fn new() -> WorldCommandBuffer {
-        WorldCommandBuffer {
-            commands: Vec::new(),
-        }
-    }
-
-    fn add_entity<ComponentsBundleType>(&mut self, components: ComponentsBundleType)
-    where
-        ComponentsBundleType: hecs::DynamicBundle + Send + Sync + 'static,
-    {
-        self.commands.push(Box::new(move |world| {
-            world.spawn(components);
-        }));
-    }
-
-    fn remove_entity(&mut self, entity: Entity) {
-        self.commands.push(Box::new(move |world| {
-            world.despawn(entity).ok();
-        }));
-    }
-
-    fn execute(&mut self, world: &mut World) {
-        for command in self.commands.drain(..) {
-            command(world);
-        }
     }
 }
 
@@ -787,6 +806,73 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // COLLISION
+
+        // Clear collisions from last frame
+        for (_entity, collider) in &mut self.world.query::<&mut Collider>() {
+            collider.collisions.clear();
+        }
+
+        // Collect bodies for indexing
+        let bodies: Vec<(Entity, Transform, Collider)> = self
+            .world
+            .query::<(&Transform, &Collider)>()
+            .iter()
+            .map(|(entity, (&xform, collider))| (entity, xform, collider.clone()))
+            .collect();
+
+        // Broadphase: Find collisions
+        let mut pairs: HashSet<(usize, usize)> = HashSet::new();
+        for index_a in 0..bodies.len() {
+            for index_b in 0..bodies.len() {
+                if index_a == index_b {
+                    continue;
+                }
+
+                let body_a = &bodies[index_a];
+                let body_b = &bodies[index_b];
+
+                let body_a_entity = body_a.0;
+                let body_b_entity = body_b.0;
+
+                let body_a_xform = body_a.1;
+                let body_b_xform = body_b.1;
+
+                let body_a_collider = &body_a.2;
+                let body_b_collider = &body_b.2;
+
+                if body_a_collider.layers_own & body_b_collider.layers_affects == 0
+                    && body_b_collider.layers_own & body_a_collider.layers_affects == 0
+                {
+                    continue;
+                }
+
+                if Vec2::distance_squared(body_a_xform.pos, body_b_xform.pos)
+                    < squared(body_a_collider.radius + body_b_collider.radius)
+                {
+                    // Intersection found
+                    if index_a < index_b {
+                        pairs.insert((index_a, index_b));
+                    } else {
+                        pairs.insert((index_b, index_a));
+                    }
+                }
+            }
+        }
+
+        // Resolve collisions
+        for (index_a, index_b) in pairs {
+            let body_a_entity = bodies[index_a].0;
+            let body_b_entity = bodies[index_b].0;
+
+            let mut collider_a = self.world.get_mut::<Collider>(body_a_entity).unwrap();
+            let mut collider_b = self.world.get_mut::<Collider>(body_b_entity).unwrap();
+
+            collider_a.collisions.push(body_b_entity);
+            collider_b.collisions.push(body_a_entity);
+        }
+
+        //------------------------------------------------------------------------------------------
         // STEERING
 
         // TURNING TOWARDS TARGET
@@ -828,9 +914,20 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE PLAYER
-        for (player_entity, (player_xform, player_motion, player)) in
-            &mut self.world.query::<(&Transform, &mut Motion, &mut Player)>()
+        for (player_entity, (player_xform, player_motion, player, collider)) in &mut self
+            .world
+            .query::<(&Transform, &mut Motion, &mut Player, &Collider)>()
         {
+            for &collision_entity in &collider.collisions {
+                if let Some(ammo_component) = self.world.get::<Ammo>(collision_entity).ok() {
+                    player.ammo = clampf(
+                        player.ammo + ammo_component.ammo_amount,
+                        0.0,
+                        player.ammo_max,
+                    );
+                }
+            }
+
             // BOOST
             let mut boost = false;
             player.speed_max = player.speed_base_max;
@@ -1103,10 +1200,10 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
-        for (ammo_entity, (ammo_xform, ammo, turn_to_target)) in
+        for (ammo_entity, (ammo_xform, ammo, turn_to_target, collider)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Ammo, &TurnTowardsTarget)>()
+                .query::<(&Transform, &mut Ammo, &TurnTowardsTarget, &Collider)>()
         {
             // Check if entity needs to be removed from game
             let mut remove_self = false;
@@ -1114,13 +1211,8 @@ impl Scene for SceneStage {
             if !canvas_rect.contains_point(ammo_xform.pos) {
                 remove_self = true;
             }
-            if self.world.contains(turn_to_target.target) {
-                let player_xform = self.world.get::<Transform>(turn_to_target.target).unwrap();
-                if Vec2::distance_squared(player_xform.pos, ammo_xform.pos)
-                    < squared(3.0 * ammo.size)
-                {
-                    remove_self = true;
-                }
+            if collider.collisions.contains(&turn_to_target.target) {
+                remove_self = true;
             }
 
             if remove_self {
