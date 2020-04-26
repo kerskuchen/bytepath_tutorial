@@ -3,7 +3,6 @@ use ct_lib::draw::*;
 use ct_lib::game::*;
 use ct_lib::math::*;
 use ct_lib::random::*;
-use ct_lib::*;
 
 use hecs::*;
 
@@ -231,9 +230,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Ammo {
-                width: size,
-                height: size,
-
+                size,
                 color: COLOR_AMMO,
             },
             TurnTowardsTarget {
@@ -446,9 +443,7 @@ struct Player {
 
 #[derive(Debug, Copy, Clone)]
 struct Ammo {
-    pub width: f32,
-    pub height: f32,
-
+    pub size: f32,
     pub color: Color,
 }
 
@@ -815,7 +810,7 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // SPAWN AMMO
 
-        if input.keyboard.recently_pressed(Scancode::A) {
+        if input.keyboard.is_down(Scancode::A) {
             if let Some(player_entity) = self.player {
                 self.world.spawn(Archetypes::new_ammo(
                     globals.random.vec2_in_rect(Rect::from_width_height(
@@ -1108,9 +1103,10 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
-        for (ammo_entity, (ammo_xform, ammo_motion, ammo, turn_to_target)) in &mut self
-            .world
-            .query::<(&Transform, &mut Motion, &mut Ammo, &TurnTowardsTarget)>()
+        for (ammo_entity, (ammo_xform, ammo, turn_to_target)) in
+            &mut self
+                .world
+                .query::<(&Transform, &mut Ammo, &TurnTowardsTarget)>()
         {
             // Check if entity needs to be removed from game
             let mut remove_self = false;
@@ -1120,7 +1116,9 @@ impl Scene for SceneStage {
             }
             if self.world.contains(turn_to_target.target) {
                 let player_xform = self.world.get::<Transform>(turn_to_target.target).unwrap();
-                if Vec2::distance_squared(player_xform.pos, ammo_xform.pos) < squared(ammo.width) {
+                if Vec2::distance_squared(player_xform.pos, ammo_xform.pos)
+                    < squared(3.0 * ammo.size)
+                {
                     remove_self = true;
                 }
             }
@@ -1129,7 +1127,7 @@ impl Scene for SceneStage {
                 self.commands.remove_entity(ammo_entity);
                 self.commands.add_entity(Archetypes::new_hit_effect(
                     ammo_xform.pos,
-                    ammo.width,
+                    ammo.size,
                     45.0,
                     COLOR_DEFAULT,
                     COLOR_AMMO,
