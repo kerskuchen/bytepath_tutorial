@@ -152,6 +152,37 @@ impl Archetypes {
         )
     }
 
+    pub fn new_trailparticle(
+        pos: Vec2,
+        size: f32,
+        lifetime: f32,
+        color: Color,
+    ) -> (Transform, TrailParticle, Drawable) {
+        (
+            Transform {
+                pos,
+                dir_angle: 0.0,
+            },
+            TrailParticle {
+                timer_tween: TimerSimple::new_started(lifetime),
+                size,
+                color,
+            },
+            Drawable {
+                mesh: MeshType::Circle {
+                    radius: size,
+                    filled: true,
+                },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                depth: DEPTH_EFFECTS,
+                color,
+                additivity: ADDITIVITY_NONE,
+                add_jitter: false,
+            },
+        )
+    }
+
     pub fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, Drawable) {
         let projectile_size = 2.5;
         (
@@ -826,23 +857,16 @@ impl Scene for SceneStage {
                 );
 
                 for &point in &exhaust_points {
-                    self.commands.add_entity((
-                        Transform {
-                            pos: point,
-                            dir_angle: 0.0,
-                        },
-                        TrailParticle {
-                            timer_tween: TimerSimple::new_started(
-                                globals.random.f32_in_range_closed(0.15, 0.25),
-                            ),
-                            size: globals.random.f32_in_range_closed(2.0, 4.0),
-                            color: if boost {
-                                COLOR_BOOST
-                            } else {
-                                COLOR_SKILL_POINT
-                            },
-                        },
-                    ));
+                    let size = globals.random.f32_in_range_closed(2.0, 4.0);
+                    let lifetime = globals.random.f32_in_range_closed(0.15, 0.25);
+                    let color = if boost {
+                        COLOR_BOOST
+                    } else {
+                        COLOR_SKILL_POINT
+                    };
+
+                    self.commands
+                        .add_entity(Archetypes::new_trailparticle(point, size, lifetime, color));
                 }
             }
 
@@ -961,28 +985,26 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE TRAILPARTICLES
-        for (particle_entity, (particle_xform, particle)) in
-            &mut self.world.query::<(&Transform, &mut TrailParticle)>()
+
+        for (particle_entity, (particle, drawable)) in
+            &mut self.world.query::<(&mut TrailParticle, &mut Drawable)>()
         {
             particle.timer_tween.update(deltatime);
-            let percentage = particle.timer_tween.completion_ratio();
-            let size = lerp(particle.size, 0.0, percentage);
-
-            draw.draw_circle_filled(
-                particle_xform.pos,
-                size,
-                DEPTH_EFFECTS,
-                particle.color,
-                ADDITIVITY_NONE,
-            );
-
             if particle.timer_tween.is_finished() {
                 self.commands.remove_entity(particle_entity);
             }
+
+            let percentage = particle.timer_tween.completion_ratio();
+            let radius = lerp(particle.size, 0.0, percentage);
+            drawable.mesh = MeshType::Circle {
+                radius,
+                filled: true,
+            };
         }
 
         //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
+
         for (projectile_entity, (projectile_xform, projectile)) in
             &mut self.world.query::<(&Transform, &mut Projectile)>()
         {
@@ -1089,7 +1111,13 @@ impl Scene for SceneStage {
                         todo!();
                     }
                     if *filled {
-                        todo!();
+                        draw.draw_circle_filled(
+                            xform.pos,
+                            scale.x * *radius,
+                            depth,
+                            color,
+                            additivity,
+                        );
                     } else {
                         draw.draw_circle_bresenham(
                             xform.pos,
