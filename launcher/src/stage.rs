@@ -314,7 +314,9 @@ impl Archetypes {
         )
     }
 
-    fn new_tick_effect(player_entity: Entity) -> (Transform, SnapToParent, TickEffect) {
+    fn new_tick_effect(player_entity: Entity) -> (Transform, SnapToParent, TickEffect, Drawable) {
+        let width = 32.0;
+        let height = 48.0;
         (
             Transform {
                 pos: Vec2::zero(),
@@ -329,8 +331,22 @@ impl Archetypes {
             },
             TickEffect {
                 timer_tween: TimerSimple::new_started(0.13),
-                width: 32.0,
-                height: 48.0,
+                width,
+                height,
+            },
+            Drawable {
+                mesh: MeshType::Rectangle {
+                    width,
+                    height,
+                    filled: true,
+                    centered: true,
+                },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                depth: DEPTH_EFFECTS,
+                color: COLOR_DEFAULT,
+                additivity: ADDITIVITY_NONE,
+                add_jitter: false,
             },
         )
     }
@@ -960,27 +976,29 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE TICKEFFECT
-        for (effect_entity, (effect_xform, effect)) in
-            &mut self.world.query::<(&mut Transform, &mut TickEffect)>()
+
+        for (effect_entity, (effect_xform, effect, drawable)) in
+            &mut self
+                .world
+                .query::<(&mut Transform, &mut TickEffect, &mut Drawable)>()
         {
             effect.timer_tween.update(deltatime);
-            let percentage = easing::cubic_inout(effect.timer_tween.completion_ratio());
-            let width = effect.width; //lerp(effect.width, effect.height, percentage);
-            let height = lerp(effect.height, 0.0, percentage);
-            let offset_y = lerp(0.0, -effect.height / 2.0, percentage);
-
-            draw.draw_rect(
-                Rect::from_pos_width_height(effect_xform.pos, width, height)
-                    .centered()
-                    .translated_by(Vec2::filled_y(offset_y)),
-                DEPTH_EFFECTS,
-                COLOR_DEFAULT,
-                ADDITIVITY_NONE,
-            );
-
             if effect.timer_tween.is_finished() {
                 self.commands.remove_entity(effect_entity);
             }
+
+            let percentage = easing::cubic_inout(effect.timer_tween.completion_ratio());
+            let width = effect.width;
+            let height = lerp(effect.height, 0.0, percentage);
+            let offset_y = lerp(0.0, -effect.height / 2.0, percentage);
+
+            drawable.mesh = MeshType::Rectangle {
+                width: width,
+                height: height,
+                filled: true,
+                centered: true,
+            };
+            drawable.pos_offset = Vec2::filled_y(offset_y);
         }
 
         //------------------------------------------------------------------------------------------
