@@ -42,7 +42,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Drawable {
-                mesh: MeshType::Lines(get_draw_lines_for_ship(ship_type)),
+                mesh: MeshType::Linestrip(get_draw_lines_for_ship(ship_type)),
                 pos_offset: Vec2::zero(),
                 scale: Vec2::filled(player_size) / 4.0,
                 color: COLOR_DEFAULT,
@@ -295,11 +295,12 @@ impl Archetypes {
         length: f32,
         lifetime: f32,
         color: Color,
-    ) -> (Transform, Motion, ExplodeParticle) {
+    ) -> (Transform, Motion, ExplodeParticle, Drawable) {
+        let dir = Vec2::from_angle_flipped_y(deg_to_rad(dir_angle));
         (
             Transform { pos, dir_angle },
             Motion {
-                vel: speed * Vec2::from_angle_flipped_y(deg_to_rad(dir_angle)),
+                vel: speed * dir,
                 acc: Vec2::zero(),
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
@@ -310,6 +311,20 @@ impl Archetypes {
                 length,
                 speed,
                 color,
+            },
+            Drawable {
+                mesh: MeshType::LineWithThickness {
+                    start: pos,
+                    end: pos + length * dir,
+                    thickness: thickness,
+                    smooth_edges: false,
+                },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                depth: DEPTH_EFFECTS,
+                color: color,
+                additivity: ADDITIVITY_NONE,
+                add_jitter: false,
             },
         )
     }
@@ -502,7 +517,13 @@ enum MeshType {
         filled: bool,
         centered: bool,
     },
-    Lines(Vec<Vec<(i32, i32)>>),
+    LineWithThickness {
+        start: Vec2,
+        end: Vec2,
+        thickness: f32,
+        smooth_edges: bool,
+    },
+    Linestrip(Vec<Vec<(i32, i32)>>),
 }
 
 #[derive(Debug, Clone)]
@@ -926,6 +947,7 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE MUZZLEFLASH
+
         for (effect_entity, (effect, drawable)) in
             &mut self.world.query::<(&mut Muzzleflash, &mut Drawable)>()
         {
@@ -946,9 +968,10 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE EXPLODE PARTICLES
-        for (particle_entity, (particle_xform, particle_motion, particle)) in &mut self
+
+        for (particle_entity, (particle_xform, particle_motion, particle, drawable)) in &mut self
             .world
-            .query::<(&Transform, &mut Motion, &mut ExplodeParticle)>()
+            .query::<(&Transform, &mut Motion, &mut ExplodeParticle, &mut Drawable)>()
         {
             particle.timer_tween.update(deltatime);
             if particle.timer_tween.is_finished() {
@@ -963,24 +986,19 @@ impl Scene for SceneStage {
             particle_motion.vel =
                 speed * Vec2::from_angle_flipped_y(deg_to_rad(particle_xform.dir_angle));
 
-            draw.draw_line_with_thickness(
-                particle_xform.pos.pixel_snapped(),
-                particle_xform.pos.pixel_snapped() + length * dir,
-                particle.thickness,
-                false,
-                DEPTH_EFFECTS,
-                particle.color,
-                ADDITIVITY_NONE,
-            );
+            drawable.mesh = MeshType::LineWithThickness {
+                start: particle_xform.pos.pixel_snapped(),
+                end: particle_xform.pos.pixel_snapped() + length * dir,
+                thickness: particle.thickness,
+                smooth_edges: false,
+            };
         }
 
         //------------------------------------------------------------------------------------------
         // UPDATE TICKEFFECT
 
-        for (effect_entity, (effect_xform, effect, drawable)) in
-            &mut self
-                .world
-                .query::<(&mut Transform, &mut TickEffect, &mut Drawable)>()
+        for (effect_entity, (effect, drawable)) in
+            &mut self.world.query::<(&mut TickEffect, &mut Drawable)>()
         {
             effect.timer_tween.update(deltatime);
             if effect.timer_tween.is_finished() {
@@ -991,7 +1009,6 @@ impl Scene for SceneStage {
             let width = effect.width;
             let height = lerp(effect.height, 0.0, percentage);
             let offset_y = lerp(0.0, -effect.height / 2.0, percentage);
-
             drawable.mesh = MeshType::Rectangle {
                 width: width,
                 height: height,
@@ -1215,7 +1232,7 @@ impl Scene for SceneStage {
                         draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
                     }
                 }
-                MeshType::Lines(linestrips) => {
+                MeshType::Linestrip(linestrips) => {
                     for linestrip_raw in linestrips {
                         let jitter = if drawable.add_jitter {
                             Some(&mut globals.random)
@@ -1231,6 +1248,22 @@ impl Scene for SceneStage {
                             ADDITIVITY_NONE,
                         );
                     }
+                }
+                MeshType::LineWithThickness {
+                    start,
+                    end,
+                    thickness,
+                    smooth_edges,
+                } => {
+                    draw.draw_line_with_thickness(
+                        *start,
+                        *end,
+                        *thickness,
+                        *smooth_edges,
+                        depth,
+                        color,
+                        additivity,
+                    );
                 }
             };
         }
