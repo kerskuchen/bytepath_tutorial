@@ -3,6 +3,7 @@ use ct_lib::draw::*;
 use ct_lib::game::*;
 use ct_lib::math::*;
 use ct_lib::random::*;
+use ct_lib::*;
 
 use hecs::*;
 
@@ -27,10 +28,11 @@ const COLOR_SKILL_POINT: Color = Color::from_rgb(255.0 / 255.0, 198.0 / 255.0, 9
 struct Archetypes {}
 
 impl Archetypes {
-    fn new_player(canvas_width: f32, canvas_height: f32) -> (Transform, Motion, Player) {
+    fn new_player(pos: Vec2, ship_type: ShipType) -> (Transform, Motion, Drawable, Player) {
+        let player_size = 12.0;
         (
             Transform {
-                pos: Vec2::new(canvas_width / 2.0, canvas_height / 2.0),
+                pos,
                 dir_angle: -90.0,
             },
             Motion {
@@ -39,12 +41,21 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
+            Drawable {
+                mesh: MeshType::Lines(get_draw_lines_for_ship(ship_type)),
+                pos_offset: Vec2::zero(),
+                scale: Vec2::filled(player_size) / 4.0,
+                color: COLOR_DEFAULT,
+                additivity: ADDITIVITY_NONE,
+                depth: DEPTH_PLAYER,
+                add_jitter: true,
+            },
             Player {
                 attack_timer: TriggerRepeating::new(0.24),
                 timer_tick: TriggerRepeating::new(5.0),
                 timer_trail_particles: TriggerRepeating::new(0.01),
 
-                ship_type: ShipType::Sorcerer,
+                ship_type,
 
                 speed: 0.0,
                 speed_max: 100.0,
@@ -53,8 +64,8 @@ impl Archetypes {
 
                 turn_speed: 1.66 * 180.0,
 
-                width: 12.0,
-                height: 12.0,
+                width: player_size,
+                height: player_size,
 
                 attack_speed: 2.0,
 
@@ -429,6 +440,58 @@ struct Drawable {
     add_jitter: bool,
 }
 
+fn linestrip_transform<CoordType>(
+    linestrip: &[CoordType],
+    pos: Vec2,
+    pivot: Vec2,
+    scale: Vec2,
+    dir: Vec2,
+    jitter: Option<&mut Random>,
+) -> Vec<Vec2>
+where
+    CoordType: Into<Vec2> + Copy + Clone,
+{
+    if let Some(random) = jitter {
+        linestrip
+            .iter()
+            .map(|&point| {
+                random.vec2_in_unit_rect()
+                    + Vec2::from(point.into()).transformed(pivot, pos, scale, dir)
+            })
+            .collect()
+    } else {
+        linestrip
+            .iter()
+            .map(|&point| Vec2::from(point.into()).transformed(pivot, pos, scale, dir))
+            .collect()
+    }
+}
+
+/*
+fn linestrip_transform(
+    linestrip: &[(i32, i32)],
+    pos: Vec2,
+    pivot: Vec2,
+    scale: Vec2,
+    dir: Vec2,
+    jitter: Option<&mut Random>,
+) -> Vec<Vec2> {
+    if let Some(random) = jitter {
+        linestrip
+            .iter()
+            .map(|&point| {
+                random.vec2_in_unit_rect() + Vec2::from(point).transformed(pivot, pos, scale, dir)
+            })
+            .collect()
+    } else {
+        linestrip
+            .iter()
+            .map(|&point| Vec2::from(point).transformed(pivot, pos, scale, dir))
+            .collect()
+    }
+}
+*/
+
 fn get_draw_lines_for_ship(ship_type: ShipType) -> Vec<Vec<(i32, i32)>> {
     match ship_type {
         ShipType::Fighter => {
@@ -459,6 +522,14 @@ fn get_draw_lines_for_ship(ship_type: ShipType) -> Vec<Vec<(i32, i32)>> {
             let wing_right = vec![(2, 2), (5, 7), (-1, 4), (-4, 0)];
             vec![hull, wing_left, wing_right]
         }
+    }
+}
+
+fn get_shoot_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
+    match ship_type {
+        ShipType::Fighter => vec![(4, 0)],
+        ShipType::Rogue => vec![(4, 0)],
+        ShipType::Sorcerer => vec![(5, 0)],
     }
 }
 
@@ -531,10 +602,8 @@ impl SceneStage {
     ) -> SceneStage {
         let mut world = World::new();
 
-        let player = world.spawn(Archetypes::new_player(
-            globals.canvas_width,
-            globals.canvas_height,
-        ));
+        let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
+        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
 
         SceneStage {
             world,
@@ -563,7 +632,39 @@ impl Scene for SceneStage {
         let deltatime = globals.deltatime;
 
         //------------------------------------------------------------------------------------------
+        // UPDATE POSITIONS
+
+        for (_entity, (xform, motion)) in &mut self.world.query::<(&mut Transform, &Motion)>() {
+            xform.pos += motion.vel * deltatime;
+            xform.dir_angle += motion.dir_angle_vel * deltatime;
+            if xform.dir_angle > 360.0 {
+                xform.dir_angle -= 360.0;
+            }
+            if xform.dir_angle < -360.0 {
+                xform.dir_angle += 360.0;
+            }
+        }
+
+        for (_entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
+            if self.world.contains(snap.parent) {
+                let parent_xform = self.world.get::<Transform>(snap.parent).unwrap();
+                if snap.pos_snap && snap.dir_angle_snap {
+                    xform.pos = parent_xform.pos
+                        + snap
+                            .pos_offset
+                            .rotated_flipped_y(deg_to_rad(parent_xform.dir_angle));
+                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
+                } else if snap.pos_snap {
+                    xform.pos = parent_xform.pos + snap.pos_offset;
+                } else if snap.dir_angle_snap {
+                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
+                }
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
         // SPAWN AMMO
+
         if input.keyboard.recently_pressed(Scancode::A) {
             if let Some(player_entity) = self.player {
                 self.world.spawn(Archetypes::new_ammo(
@@ -637,7 +738,7 @@ impl Scene for SceneStage {
                 player.boost_timer = TimerSimple::new_started(player.boost_cooldown);
             }
 
-            // MOVEMENT
+            // STEERING
             player_motion.dir_angle_vel = 0.0;
             if input.keyboard.is_down(Scancode::Left) {
                 player_motion.dir_angle_vel = player.turn_speed;
@@ -648,50 +749,52 @@ impl Scene for SceneStage {
             player.speed = f32::min(player.speed + player.acc * deltatime, player.speed_max);
             let player_dir = Vec2::from_angle_flipped_y(deg_to_rad(player_xform.dir_angle));
             let player_speed = player.speed;
-
             player_motion.vel = player_speed * player_dir;
+
+            let player_pos = player_xform.pos;
+            let player_scale = Vec2::filled(player.width) / 4.0;
 
             // SHOOTING
             if player.attack_timer.update(player.attack_speed * deltatime) {
-                let start_pos = player_xform.pos + player.width * player_dir;
+                let shoot_points_relative: Vec<Vec2> = linestrip_transform(
+                    &get_shoot_points_for_ship(player.ship_type),
+                    Vec2::zero(),
+                    Vec2::zero(),
+                    player_scale,
+                    Vec2::unit_x(),
+                    None,
+                );
+                let shoot_points: Vec<Vec2> = linestrip_transform(
+                    &get_shoot_points_for_ship(player.ship_type),
+                    player_pos,
+                    Vec2::zero(),
+                    player_scale,
+                    player_dir,
+                    None,
+                );
+
+                let muzzle_pos_relative = shoot_points_relative.first().cloned().unwrap();
+                let muzzle_pos = shoot_points.first().cloned().unwrap();
 
                 self.commands.add_entity(Archetypes::new_muzzleflash(
                     player_entity,
-                    Vec2::new(player.width, 0.0),
+                    muzzle_pos_relative,
                     45.0,
                 ));
                 self.commands
-                    .add_entity(Archetypes::new_projectile(start_pos, player_dir));
-            }
-
-            // DRAWING
-            let player_pos = player_xform.pos;
-            let scale = Vec2::filled(player.width) / 4.0;
-            let transform_into_player_coords = move |point: (i32, i32)| {
-                Vec2::from(point).transformed(Vec2::zero(), player_pos, scale, player_dir)
-            };
-            let linestrips = get_draw_lines_for_ship(player.ship_type);
-            for linestrip in &linestrips {
-                let linestrip: Vec<Vec2> = linestrip
-                    .iter()
-                    .map(|&point| {
-                        globals.random.vec2_in_unit_rect() + transform_into_player_coords(point)
-                    })
-                    .collect();
-                draw.draw_linestrip_bresenham(
-                    &linestrip,
-                    DEPTH_PLAYER,
-                    COLOR_DEFAULT,
-                    ADDITIVITY_NONE,
-                );
+                    .add_entity(Archetypes::new_projectile(muzzle_pos, player_dir));
             }
 
             // EXHAUST PARTICLES
             if player.timer_trail_particles.update(deltatime) {
-                let exhaust_points: Vec<Vec2> = get_exhaust_points_for_ship(player.ship_type)
-                    .iter()
-                    .map(|&point| transform_into_player_coords(point))
-                    .collect();
+                let exhaust_points: Vec<Vec2> = linestrip_transform(
+                    &get_exhaust_points_for_ship(player.ship_type),
+                    player_pos,
+                    Vec2::zero(),
+                    player_scale,
+                    player_dir,
+                    None,
+                );
 
                 for &point in &exhaust_points {
                     self.commands.add_entity((
@@ -779,6 +882,10 @@ impl Scene for SceneStage {
             .query::<(&Transform, &mut Motion, &mut ExplodeParticle)>()
         {
             particle.timer_tween.update(deltatime);
+            if particle.timer_tween.is_finished() {
+                self.commands.remove_entity(particle_entity);
+            }
+
             let percentage = particle.timer_tween.completion_ratio();
             let length = lerp(particle.length, 0.0, percentage);
             let speed = lerp(particle.speed, 0.0, percentage);
@@ -796,10 +903,6 @@ impl Scene for SceneStage {
                 particle.color,
                 ADDITIVITY_NONE,
             );
-
-            if particle.timer_tween.is_finished() {
-                self.commands.remove_entity(particle_entity);
-            }
         }
 
         //------------------------------------------------------------------------------------------
@@ -955,37 +1058,6 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // UPDATE POSITIONS
-
-        for (_entity, (xform, motion)) in &mut self.world.query::<(&mut Transform, &Motion)>() {
-            xform.pos += motion.vel * deltatime;
-            xform.dir_angle += motion.dir_angle_vel * deltatime;
-            if xform.dir_angle > 360.0 {
-                xform.dir_angle -= 360.0;
-            }
-            if xform.dir_angle < -360.0 {
-                xform.dir_angle += 360.0;
-            }
-        }
-
-        for (_entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
-            if self.world.contains(snap.parent) {
-                let parent_xform = self.world.get::<Transform>(snap.parent).unwrap();
-                if snap.pos_snap && snap.dir_angle_snap {
-                    xform.pos = parent_xform.pos
-                        + snap
-                            .pos_offset
-                            .rotated_flipped_y(deg_to_rad(parent_xform.dir_angle));
-                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
-                } else if snap.pos_snap {
-                    xform.pos = parent_xform.pos + snap.pos_offset;
-                } else if snap.dir_angle_snap {
-                    xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
-                }
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
         // DRAWING
         for (_entity, (xform, drawable)) in &mut self.world.query::<(&Transform, &Drawable)>() {
             let pos = xform.pos;
@@ -1079,37 +1151,20 @@ impl Scene for SceneStage {
                             Rect::from_pos_width_height(pos, *width, *height)
                         };
 
-                        let linestrip: Vec<Vec2> = rect
-                            .linestrip()
-                            .iter()
-                            .map(|&point| point.transformed(pivot, pos, scale, dir))
-                            .collect();
+                        let linestrip: Vec<Vec2> =
+                            linestrip_transform(&rect.linestrip(), pos, pivot, scale, dir, None);
                         draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
                     }
                 }
                 MeshType::Lines(linestrips) => {
-                    for linestrip in linestrips {
-                        let linestrip: Vec<Vec2> = if drawable.add_jitter {
-                            linestrip
-                                .iter()
-                                .map(|&point| {
-                                    globals.random.vec2_in_unit_rect()
-                                        + Vec2::from(point).transformed(
-                                            Vec2::zero(),
-                                            pos,
-                                            scale,
-                                            dir,
-                                        )
-                                })
-                                .collect()
+                    for linestrip_raw in linestrips {
+                        let jitter = if drawable.add_jitter {
+                            Some(&mut globals.random)
                         } else {
-                            linestrip
-                                .iter()
-                                .map(|&point| {
-                                    Vec2::from(point).transformed(Vec2::zero(), pos, scale, dir)
-                                })
-                                .collect()
+                            None
                         };
+                        let linestrip: Vec<Vec2> =
+                            linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
                         draw.draw_linestrip_bresenham(
                             &linestrip,
                             DEPTH_PLAYER,
