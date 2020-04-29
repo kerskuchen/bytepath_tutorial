@@ -76,6 +76,27 @@ struct MoveTowardsTarget {
     pub target: Entity,
     pub follow_precision_percent: f32,
 }
+#[derive(Debug, Copy, Clone)]
+struct Blinker {
+    pub repeat_timer: TriggerRepeating,
+    pub visible: bool,
+}
+impl Blinker {
+    fn new(start_visibility: bool, start_time: f32, phase_duration: f32) -> Blinker {
+        Blinker {
+            repeat_timer: TriggerRepeating::new_with_distinct_triggertimes(
+                start_time,
+                phase_duration,
+            ),
+            visible: start_visibility,
+        }
+    }
+    fn update(&mut self, deltatime: f32) {
+        if self.repeat_timer.update(deltatime) {
+            self.visible = !self.visible;
+        }
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Primary Components
@@ -160,8 +181,10 @@ struct Projectile {
 struct HitEffect {
     pub timer_stages: TimerSimple,
     pub size: f32,
-    pub color_first_stage: Color,
-    pub color_second_stage: Color,
+    pub first_stage_color: Color,
+    pub first_stage_duration: f32,
+    pub second_stage_color: Color,
+    pub second_stage_duration: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -218,6 +241,7 @@ struct Drawable {
     color: Color,
     additivity: Additivity,
     add_jitter: bool,
+    visible: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +255,10 @@ fn draw_drawable(
     xform: &Transform,
     drawable: &Drawable,
 ) {
+    if !drawable.visible {
+        return;
+    }
+
     let pos = xform.pos;
     let scale = drawable.scale;
     let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
@@ -414,6 +442,7 @@ impl Archetypes {
                 additivity: ADDITIVITY_NONE,
                 depth: DEPTH_PLAYER,
                 add_jitter: true,
+                visible: true,
             },
             Player {
                 attack_timer: TriggerRepeating::new(0.24),
@@ -481,6 +510,7 @@ impl Archetypes {
                 additivity: ADDITIVITY_NONE,
                 depth: DEPTH_SCREENFLASH,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -520,6 +550,7 @@ impl Archetypes {
                 additivity: ADDITIVITY_NONE,
                 depth: DEPTH_EFFECTS,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -551,6 +582,7 @@ impl Archetypes {
                 color,
                 additivity: ADDITIVITY_NONE,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -582,6 +614,7 @@ impl Archetypes {
                 depth: DEPTH_PROJECTILE,
                 color: COLOR_DEFAULT,
                 additivity: ADDITIVITY_NONE,
+                visible: true,
             },
         )
     }
@@ -637,6 +670,7 @@ impl Archetypes {
                 additivity: ADDITIVITY_NONE,
                 depth: DEPTH_COLLECTIBLES,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -682,6 +716,7 @@ impl Archetypes {
                         additivity: ADDITIVITY_NONE,
                         depth: DEPTH_COLLECTIBLES,
                         add_jitter: false,
+                        visible: true,
                     },
                     Drawable {
                         mesh: MeshType::RectangleTransformed {
@@ -696,6 +731,7 @@ impl Archetypes {
                         additivity: ADDITIVITY_NONE,
                         depth: DEPTH_COLLECTIBLES,
                         add_jitter: false,
+                        visible: true,
                     },
                 ],
             },
@@ -706,16 +742,22 @@ impl Archetypes {
         pos: Vec2,
         size: f32,
         dir_angle: f32,
-        color_first_stage: Color,
-        color_second_stage: Color,
+        first_stage_color: Color,
+        first_stage_duration: f32,
+        second_stage_color: Color,
+        second_stage_duration: f32,
     ) -> (Transform, HitEffect, Drawable) {
         (
             Transform { pos, dir_angle },
             HitEffect {
-                timer_stages: TimerSimple::new_started(0.25),
+                timer_stages: TimerSimple::new_started(
+                    first_stage_duration + second_stage_duration,
+                ),
                 size,
-                color_first_stage,
-                color_second_stage,
+                first_stage_color,
+                first_stage_duration,
+                second_stage_color,
+                second_stage_duration,
             },
             Drawable {
                 mesh: MeshType::RectangleTransformed {
@@ -726,10 +768,11 @@ impl Archetypes {
                 },
                 pos_offset: Vec2::zero(),
                 scale: Vec2::ones(),
-                color: color_first_stage,
+                color: first_stage_color,
                 additivity: ADDITIVITY_NONE,
                 depth: DEPTH_EFFECTS,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -772,6 +815,7 @@ impl Archetypes {
                 color: color,
                 additivity: ADDITIVITY_NONE,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -809,6 +853,7 @@ impl Archetypes {
                 color: COLOR_DEFAULT,
                 additivity: ADDITIVITY_NONE,
                 add_jitter: false,
+                visible: true,
             },
         )
     }
@@ -834,6 +879,31 @@ impl WorldCommandBuffer {
     {
         self.commands.push(Box::new(move |world| {
             world.spawn(components);
+        }));
+    }
+
+    fn add_component<ComponentType>(&mut self, entity: Entity, component: ComponentType)
+    where
+        ComponentType: Send + Sync + 'static,
+    {
+        self.commands.push(Box::new(move |world| {
+            world
+                .insert_one(entity, component)
+                .expect("Could not add component to entity");
+        }));
+    }
+
+    fn add_component_bundle<ComponentsBundleType>(
+        &mut self,
+        entity: Entity,
+        components: ComponentsBundleType,
+    ) where
+        ComponentsBundleType: hecs::DynamicBundle + Send + Sync + 'static,
+    {
+        self.commands.push(Box::new(move |world| {
+            world
+                .insert(entity, components)
+                .expect("Could not add components to entity");
         }));
     }
 
@@ -1422,7 +1492,9 @@ impl Scene for SceneStage {
                     3.0 * projectile.size,
                     0.0,
                     COLOR_DEFAULT,
+                    0.1,
                     COLOR_HP,
+                    0.15,
                 ));
             }
         }
@@ -1437,10 +1509,10 @@ impl Scene for SceneStage {
                 self.commands.remove_entity(entity);
             }
 
-            let color = if hit.timer_stages.time_cur < 0.1 {
-                hit.color_first_stage
+            let color = if hit.timer_stages.time_cur < hit.first_stage_duration {
+                hit.first_stage_color
             } else {
-                hit.color_second_stage
+                hit.second_stage_color
             };
             drawable.color = color;
         }
@@ -1470,7 +1542,9 @@ impl Scene for SceneStage {
                     ammo.size,
                     45.0,
                     COLOR_DEFAULT,
+                    0.1,
                     ammo.color,
+                    0.15,
                 ));
 
                 for _ in 0..globals.random.gen_range(4, 8) {
@@ -1513,6 +1587,21 @@ impl Scene for SceneStage {
                 self.commands.remove_entity(entity);
                 if collected {
                     // Create collect effect
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            boost.size,
+                            45.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            boost.color,
+                            0.35,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
@@ -1520,7 +1609,9 @@ impl Scene for SceneStage {
                         boost.size,
                         45.0,
                         COLOR_DEFAULT,
+                        0.1,
                         boost.color,
+                        0.15,
                     ));
 
                     for _ in 0..globals.random.gen_range(4, 8) {
@@ -1537,6 +1628,17 @@ impl Scene for SceneStage {
                 }
             }
         }
+
+        //------------------------------------------------------------------------------------------
+        // BLINKER
+
+        for (_entity, (blinker, drawable)) in
+            &mut self.world.query::<(&mut Blinker, &mut Drawable)>()
+        {
+            blinker.update(deltatime);
+            drawable.visible = blinker.visible;
+        }
+
         //------------------------------------------------------------------------------------------
         // DRAWING
 
