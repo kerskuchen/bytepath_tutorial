@@ -8,6 +8,8 @@ use hecs::*;
 
 use std::collections::HashSet;
 
+const DEBUG_DRAW_ENABLE: bool = false;
+
 const DEPTH_BACKGROUND: Depth = 0.0;
 const DEPTH_PLAYER: Depth = 10.0;
 const DEPTH_PROJECTILE: Depth = 20.0;
@@ -28,7 +30,7 @@ const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Components
+// Shared Components
 
 #[derive(Debug, Clone)]
 struct Collider {
@@ -70,10 +72,13 @@ struct SnapToParent {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct TurnTowardsTarget {
+struct MoveTowardsTarget {
     pub target: Entity,
     pub follow_precision_percent: f32,
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Primary Components
 
 #[derive(Debug, Copy, Clone)]
 struct Player {
@@ -103,9 +108,9 @@ struct Player {
 
     pub boost: f32,
     pub boost_max: f32,
-    pub boost_cooldown: f32,
     pub boost_allowed: bool,
-    pub boost_timer: TimerSimple,
+    pub boost_cooldown_time: f32,
+    pub boost_cooldown_timer: TimerSimple,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -113,6 +118,13 @@ struct Ammo {
     pub size: f32,
     pub color: Color,
     pub ammo_amount: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Boost {
+    pub size: f32,
+    pub color: Color,
+    pub boost_amount: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -168,6 +180,9 @@ struct TrailParticle {
     pub color: Color,
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Drawables
+
 #[derive(Debug, Clone)]
 enum MeshType {
     Circle {
@@ -194,7 +209,6 @@ enum MeshType {
     },
     Linestrip(Vec<Vec<(i32, i32)>>),
 }
-
 #[derive(Debug, Clone)]
 struct Drawable {
     mesh: MeshType,
@@ -204,6 +218,143 @@ struct Drawable {
     color: Color,
     additivity: Additivity,
     add_jitter: bool,
+}
+
+#[derive(Debug, Clone)]
+struct MultiDrawable {
+    drawables: Vec<Drawable>,
+}
+
+fn draw_drawable(
+    draw: &mut Drawstate,
+    globals: &mut Globals,
+    xform: &Transform,
+    drawable: &Drawable,
+) {
+    let pos = xform.pos;
+    let scale = drawable.scale;
+    let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
+    let pivot = drawable.pos_offset;
+    let depth = drawable.depth;
+    let color = drawable.color;
+    let additivity = drawable.additivity;
+    match &drawable.mesh {
+        MeshType::Circle { radius, filled } => {
+            if drawable.add_jitter {
+                todo!();
+            }
+            if scale.x != scale.y {
+                todo!();
+            }
+            if *filled {
+                draw.draw_circle_filled(xform.pos, scale.x * *radius, depth, color, additivity);
+            } else {
+                draw.draw_circle_bresenham(xform.pos, scale.x * *radius, depth, color, additivity);
+            }
+        }
+        MeshType::Rectangle {
+            width,
+            height,
+            filled,
+            centered,
+        } => {
+            if drawable.add_jitter {
+                todo!();
+            }
+
+            let rect = if *centered {
+                Rect::from_pos_width_height(pos, scale.x * *width, scale.y * *height)
+                    .centered()
+                    .translated_by(pivot)
+            } else {
+                Rect::from_pos_width_height(pos, scale.x * *width, scale.y * *height)
+                    .translated_by(pivot)
+            };
+
+            if *filled {
+                draw.draw_rect(rect, depth, color, additivity);
+            } else {
+                draw.draw_linestrip_bresenham(
+                    &rect.linestrip(),
+                    DEPTH_COLLECTIBLES,
+                    COLOR_AMMO,
+                    ADDITIVITY_NONE,
+                );
+            }
+        }
+        MeshType::RectangleTransformed {
+            width,
+            height,
+            filled,
+            centered,
+        } => {
+            if drawable.add_jitter {
+                todo!();
+            }
+
+            let center_offset = if *centered {
+                Vec2::new(*width, *height) / 2.0
+            } else {
+                Vec2::zero()
+            };
+
+            if *filled {
+                draw.draw_rect_transformed(
+                    Vec2::new(*width, *height),
+                    pivot + center_offset,
+                    pos,
+                    scale,
+                    dir,
+                    depth,
+                    color,
+                    additivity,
+                );
+            } else {
+                let rect = if *centered {
+                    Rect::from_width_height(*width, *height).centered()
+                } else {
+                    Rect::from_pos_width_height(pos, *width, *height)
+                };
+
+                let linestrip: Vec<Vec2> =
+                    linestrip_transform(&rect.linestrip(), pos, pivot, scale, dir, None);
+                draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
+            }
+        }
+        MeshType::Linestrip(linestrips) => {
+            for linestrip_raw in linestrips {
+                let jitter = if drawable.add_jitter {
+                    Some(&mut globals.random)
+                } else {
+                    None
+                };
+                let linestrip: Vec<Vec2> =
+                    linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
+                draw.draw_linestrip_bresenham(
+                    &linestrip,
+                    DEPTH_PLAYER,
+                    COLOR_DEFAULT,
+                    ADDITIVITY_NONE,
+                );
+            }
+        }
+        MeshType::LineWithThickness {
+            start,
+            end,
+            thickness,
+            smooth_edges,
+        } => {
+            draw.draw_line_with_thickness(
+                *start,
+                *end,
+                *thickness,
+                *smooth_edges,
+                depth,
+                color,
+                additivity,
+            );
+        }
+    };
 }
 
 fn linestrip_transform<CoordType>(
@@ -232,6 +383,9 @@ where
             .collect()
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Archetypes
 
 struct Archetypes {}
 
@@ -288,9 +442,9 @@ impl Archetypes {
 
                 boost: 100.0,
                 boost_max: 100.0,
-                boost_cooldown: 2.0,
+                boost_cooldown_time: 2.0,
                 boost_allowed: true,
-                boost_timer: TimerSimple::new_stopped(1.0),
+                boost_cooldown_timer: TimerSimple::new_stopped(1.0),
             },
             Collider {
                 radius: player_size,
@@ -331,7 +485,7 @@ impl Archetypes {
         )
     }
 
-    pub fn new_muzzleflash(
+    fn new_muzzleflash(
         parent: Entity,
         pos_offset: Vec2,
         dir_angle_offset: f32,
@@ -370,7 +524,7 @@ impl Archetypes {
         )
     }
 
-    pub fn new_trailparticle(
+    fn new_trailparticle(
         pos: Vec2,
         size: f32,
         lifetime: f32,
@@ -401,7 +555,7 @@ impl Archetypes {
         )
     }
 
-    pub fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, Drawable) {
+    fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, Drawable) {
         let projectile_size = 2.5;
         (
             Transform {
@@ -432,7 +586,7 @@ impl Archetypes {
         )
     }
 
-    pub fn new_ammo(
+    fn new_ammo(
         pos: Vec2,
         vel: Vec2,
         dir_angle: f32,
@@ -442,7 +596,7 @@ impl Archetypes {
         Transform,
         Motion,
         Ammo,
-        TurnTowardsTarget,
+        MoveTowardsTarget,
         Collider,
         Drawable,
     ) {
@@ -460,7 +614,7 @@ impl Archetypes {
                 color: COLOR_AMMO,
                 ammo_amount: 5.0,
             },
-            TurnTowardsTarget {
+            MoveTowardsTarget {
                 target: player_entity,
                 follow_precision_percent: 0.1,
             },
@@ -487,7 +641,68 @@ impl Archetypes {
         )
     }
 
-    pub fn new_hit_effect(
+    fn new_boost(
+        pos: Vec2,
+        vel: Vec2,
+        dir_angle: f32,
+        dir_angle_vel: f32,
+    ) -> (Transform, Motion, Boost, Collider, MultiDrawable) {
+        let size = 12.0;
+        (
+            Transform { pos, dir_angle },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel,
+                dir_angle_acc: 0.0,
+            },
+            Boost {
+                size,
+                color: COLOR_BOOST,
+                boost_amount: 50.0,
+            },
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
+            },
+            MultiDrawable {
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 1.0 * size,
+                            height: 1.0 * size,
+                            filled: false,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_BOOST,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                    },
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 0.25 * size,
+                            height: 0.25 * size,
+                            filled: true,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_BOOST,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                    },
+                ],
+            },
+        )
+    }
+
+    fn new_hit_effect(
         pos: Vec2,
         size: f32,
         dir_angle: f32,
@@ -519,7 +734,7 @@ impl Archetypes {
         )
     }
 
-    pub fn new_explode_particle(
+    fn new_explode_particle(
         pos: Vec2,
         dir_angle: f32,
         speed: f32,
@@ -875,11 +1090,11 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // STEERING
 
-        // TURNING TOWARDS TARGET
+        // MOVE TOWARDS TARGET
         for (_entity, (xform, motion, follow)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Motion, &TurnTowardsTarget)>()
+                .query::<(&Transform, &mut Motion, &MoveTowardsTarget)>()
         {
             if self.world.contains(follow.target) {
                 let target_xform = self.world.get::<Transform>(follow.target).unwrap();
@@ -913,7 +1128,30 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // SPAWN BOOST
+
+        if input.keyboard.is_down(Scancode::B) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+            self.world.spawn(Archetypes::new_boost(
+                pos,
+                vel,
+                globals.random.f32_in_range_closed(0.0, 360.0),
+                globals.random.f32_in_range_closed(-360.0, 360.0),
+            ));
+        }
+
+        //------------------------------------------------------------------------------------------
         // UPDATE PLAYER
+
         for (player_entity, (player_xform, player_motion, player, collider)) in &mut self
             .world
             .query::<(&Transform, &mut Motion, &mut Player, &Collider)>()
@@ -926,34 +1164,45 @@ impl Scene for SceneStage {
                         player.ammo_max,
                     );
                 }
+                if let Some(boost_component) = self.world.get::<Boost>(collision_entity).ok() {
+                    player.boost = clampf(
+                        player.boost + boost_component.boost_amount,
+                        0.0,
+                        player.boost_max,
+                    );
+                    if player.boost > player.boost_max / 2.0 {
+                        player.boost_allowed = true;
+                        player.boost_cooldown_timer.stop();
+                    }
+                }
             }
 
             // BOOST
-            let mut boost = false;
+            let mut boost_active = false;
             player.speed_max = player.speed_base_max;
             if player.boost_allowed {
                 if input.keyboard.is_down(Scancode::Up) {
                     player.speed_max = 1.5 * player.speed_base_max;
-                    boost = true;
+                    boost_active = true;
                 }
                 if input.keyboard.is_down(Scancode::Down) {
                     player.speed_max = 0.5 * player.speed_base_max;
-                    boost = true;
+                    boost_active = true;
                 }
             } else {
-                player.boost_timer.update(deltatime);
-                if player.boost_timer.is_finished() {
+                player.boost_cooldown_timer.update(deltatime);
+                if player.boost_cooldown_timer.is_finished() {
                     player.boost_allowed = true;
                 }
             }
-            if boost {
+            if boost_active {
                 player.boost = f32::max(player.boost - 50.0 * deltatime, 0.0);
             } else {
                 player.boost = f32::min(player.boost + 10.0 * deltatime, player.boost_max);
             }
             if player.boost == 0.0 {
                 player.boost_allowed = false;
-                player.boost_timer = TimerSimple::new_started(player.boost_cooldown);
+                player.boost_cooldown_timer = TimerSimple::new_started(player.boost_cooldown_time);
             }
 
             // STEERING
@@ -1017,7 +1266,7 @@ impl Scene for SceneStage {
                 for &point in &exhaust_points {
                     let size = globals.random.f32_in_range_closed(2.0, 4.0);
                     let lifetime = globals.random.f32_in_range_closed(0.15, 0.25);
-                    let color = if boost {
+                    let color = if boost_active {
                         COLOR_BOOST
                     } else {
                         COLOR_SKILL_POINT
@@ -1118,18 +1367,18 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE TICKEFFECT
 
-        for (effect_entity, (effect, drawable)) in
+        for (entity, (tick, drawable)) in
             &mut self.world.query::<(&mut TickEffect, &mut Drawable)>()
         {
-            effect.timer_tween.update(deltatime);
-            if effect.timer_tween.is_finished() {
-                self.commands.remove_entity(effect_entity);
+            tick.timer_tween.update(deltatime);
+            if tick.timer_tween.is_finished() {
+                self.commands.remove_entity(entity);
             }
 
-            let percentage = easing::cubic_inout(effect.timer_tween.completion_ratio());
-            let width = effect.width;
-            let height = lerp(effect.height, 0.0, percentage);
-            let offset_y = lerp(0.0, -effect.height / 2.0, percentage);
+            let percentage = easing::cubic_inout(tick.timer_tween.completion_ratio());
+            let width = tick.width;
+            let height = lerp(tick.height, 0.0, percentage);
+            let offset_y = lerp(0.0, -tick.height / 2.0, percentage);
             drawable.mesh = MeshType::Rectangle {
                 width: width,
                 height: height,
@@ -1142,16 +1391,16 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE TRAILPARTICLES
 
-        for (particle_entity, (particle, drawable)) in
+        for (entity, (trail, drawable)) in
             &mut self.world.query::<(&mut TrailParticle, &mut Drawable)>()
         {
-            particle.timer_tween.update(deltatime);
-            if particle.timer_tween.is_finished() {
-                self.commands.remove_entity(particle_entity);
+            trail.timer_tween.update(deltatime);
+            if trail.timer_tween.is_finished() {
+                self.commands.remove_entity(entity);
             }
 
-            let percentage = particle.timer_tween.completion_ratio();
-            let radius = lerp(particle.size, 0.0, percentage);
+            let percentage = trail.timer_tween.completion_ratio();
+            let radius = lerp(trail.size, 0.0, percentage);
             drawable.mesh = MeshType::Circle {
                 radius,
                 filled: true,
@@ -1161,15 +1410,15 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
 
-        for (projectile_entity, (projectile_xform, projectile)) in
+        for (entity, (xform, projectile)) in
             &mut self.world.query::<(&Transform, &mut Projectile)>()
         {
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
-            if !canvas_rect.contains_point(projectile_xform.pos) {
-                self.commands.remove_entity(projectile_entity);
+            if !canvas_rect.contains_point(xform.pos) {
+                self.commands.remove_entity(entity);
 
                 self.commands.add_entity(Archetypes::new_hit_effect(
-                    projectile_xform.pos.clamped_to_rect(canvas_rect),
+                    xform.pos.clamped_to_rect(canvas_rect),
                     3.0 * projectile.size,
                     0.0,
                     COLOR_DEFAULT,
@@ -1181,18 +1430,17 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE HIT EFFECTS
 
-        for (effect_entity, (effect, drawable)) in
-            &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
+        for (entity, (hit, drawable)) in &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
         {
-            effect.timer_stages.update(deltatime);
-            if effect.timer_stages.is_finished() {
-                self.commands.remove_entity(effect_entity);
+            hit.timer_stages.update(deltatime);
+            if hit.timer_stages.is_finished() {
+                self.commands.remove_entity(entity);
             }
 
-            let color = if effect.timer_stages.time_cur < 0.1 {
-                effect.color_first_stage
+            let color = if hit.timer_stages.time_cur < 0.1 {
+                hit.color_first_stage
             } else {
-                effect.color_second_stage
+                hit.color_second_stage
             };
             drawable.color = color;
         }
@@ -1200,185 +1448,128 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
-        for (ammo_entity, (ammo_xform, ammo, turn_to_target, collider)) in
+        for (entity, (xform, ammo, move_to_target, collider)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Ammo, &TurnTowardsTarget, &Collider)>()
+                .query::<(&Transform, &mut Ammo, &MoveTowardsTarget, &Collider)>()
         {
             // Check if entity needs to be removed from game
             let mut remove_self = false;
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
-            if !canvas_rect.contains_point(ammo_xform.pos) {
+            if !canvas_rect.contains_point(xform.pos) {
                 remove_self = true;
             }
-            if collider.collisions.contains(&turn_to_target.target) {
+            if collider.collisions.contains(&move_to_target.target) {
                 remove_self = true;
             }
 
             if remove_self {
-                self.commands.remove_entity(ammo_entity);
+                self.commands.remove_entity(entity);
                 self.commands.add_entity(Archetypes::new_hit_effect(
-                    ammo_xform.pos,
+                    xform.pos,
                     ammo.size,
                     45.0,
                     COLOR_DEFAULT,
-                    COLOR_AMMO,
+                    ammo.color,
                 ));
 
                 for _ in 0..globals.random.gen_range(4, 8) {
                     self.commands.add_entity(Archetypes::new_explode_particle(
-                        ammo_xform.pos,
+                        xform.pos,
                         rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
                         globals.random.f32_in_range_closed(50.0, 100.0),
                         globals.random.f32_in_range_closed(1.0, 2.0),
                         globals.random.f32_in_range_closed(3.0, 8.0),
                         globals.random.f32_in_range_closed(0.3, 0.5),
-                        COLOR_AMMO,
+                        ammo.color,
                     ));
                 }
             }
         }
 
         //------------------------------------------------------------------------------------------
+        // UPDATE BOOST
+
+        for (entity, (xform, motion, boost, collider)) in
+            &mut self
+                .world
+                .query::<(&Transform, &Motion, &mut Boost, &Collider)>()
+        {
+            // Check if entity needs to be removed from game
+            let mut remove_self = false;
+            let mut collected = false;
+            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
+                remove_self = true;
+            }
+            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
+                remove_self = true;
+            }
+            if !collider.collisions.is_empty() {
+                remove_self = true;
+                collected = true;
+            }
+
+            if remove_self {
+                self.commands.remove_entity(entity);
+                if collected {
+                    // Create collect effect
+                } else {
+                    // Create explode effect
+                    self.commands.add_entity(Archetypes::new_hit_effect(
+                        xform.pos,
+                        boost.size,
+                        45.0,
+                        COLOR_DEFAULT,
+                        boost.color,
+                    ));
+
+                    for _ in 0..globals.random.gen_range(4, 8) {
+                        self.commands.add_entity(Archetypes::new_explode_particle(
+                            xform.pos,
+                            rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                            globals.random.f32_in_range_closed(50.0, 100.0),
+                            globals.random.f32_in_range_closed(1.0, 2.0),
+                            globals.random.f32_in_range_closed(3.0, 8.0),
+                            globals.random.f32_in_range_closed(0.3, 0.5),
+                            COLOR_AMMO,
+                        ));
+                    }
+                }
+            }
+        }
+        //------------------------------------------------------------------------------------------
         // DRAWING
 
+        for (_entity, (xform, multi_drawable)) in
+            &mut self.world.query::<(&Transform, &MultiDrawable)>()
+        {
+            for drawable in &multi_drawable.drawables {
+                draw_drawable(draw, globals, xform, drawable);
+            }
+        }
         for (_entity, (xform, drawable)) in &mut self.world.query::<(&Transform, &Drawable)>() {
-            let pos = xform.pos;
-            let scale = drawable.scale;
-            let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
-            let pivot = drawable.pos_offset;
-            let depth = drawable.depth;
-            let color = drawable.color;
-            let additivity = drawable.additivity;
-            match &drawable.mesh {
-                MeshType::Circle { radius, filled } => {
-                    if drawable.add_jitter {
-                        todo!();
-                    }
-                    if scale.x != scale.y {
-                        todo!();
-                    }
-                    if *filled {
-                        draw.draw_circle_filled(
-                            xform.pos,
-                            scale.x * *radius,
-                            depth,
-                            color,
-                            additivity,
-                        );
-                    } else {
-                        draw.draw_circle_bresenham(
-                            xform.pos,
-                            scale.x * *radius,
-                            depth,
-                            color,
-                            additivity,
-                        );
-                    }
-                }
-                MeshType::Rectangle {
-                    width,
-                    height,
-                    filled,
-                    centered,
-                } => {
-                    if drawable.add_jitter {
-                        todo!();
-                    }
+            draw_drawable(draw, globals, xform, drawable);
+        }
 
-                    let rect = if *centered {
-                        Rect::from_pos_width_height(pos, scale.x * *width, scale.y * *height)
-                            .centered()
-                            .translated_by(pivot)
-                    } else {
-                        Rect::from_pos_width_height(pos, scale.x * *width, scale.y * *height)
-                            .translated_by(pivot)
-                    };
+        //------------------------------------------------------------------------------------------
+        // DEBUG DRAWING
 
-                    if *filled {
-                        draw.draw_rect(rect, depth, color, additivity);
-                    } else {
-                        draw.draw_linestrip_bresenham(
-                            &rect.linestrip(),
-                            DEPTH_COLLECTIBLES,
-                            COLOR_AMMO,
-                            ADDITIVITY_NONE,
-                        );
-                    }
-                }
-                MeshType::RectangleTransformed {
-                    width,
-                    height,
-                    filled,
-                    centered,
-                } => {
-                    if drawable.add_jitter {
-                        todo!();
-                    }
-
-                    let center_offset = if *centered {
-                        Vec2::new(*width, *height) / 2.0
-                    } else {
-                        Vec2::zero()
-                    };
-
-                    if *filled {
-                        draw.draw_rect_transformed(
-                            Vec2::new(*width, *height),
-                            pivot + center_offset,
-                            pos,
-                            scale,
-                            dir,
-                            depth,
-                            color,
-                            additivity,
-                        );
-                    } else {
-                        let rect = if *centered {
-                            Rect::from_width_height(*width, *height).centered()
-                        } else {
-                            Rect::from_pos_width_height(pos, *width, *height)
-                        };
-
-                        let linestrip: Vec<Vec2> =
-                            linestrip_transform(&rect.linestrip(), pos, pivot, scale, dir, None);
-                        draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
-                    }
-                }
-                MeshType::Linestrip(linestrips) => {
-                    for linestrip_raw in linestrips {
-                        let jitter = if drawable.add_jitter {
-                            Some(&mut globals.random)
-                        } else {
-                            None
-                        };
-                        let linestrip: Vec<Vec2> =
-                            linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
-                        draw.draw_linestrip_bresenham(
-                            &linestrip,
-                            DEPTH_PLAYER,
-                            COLOR_DEFAULT,
-                            ADDITIVITY_NONE,
-                        );
-                    }
-                }
-                MeshType::LineWithThickness {
-                    start,
-                    end,
-                    thickness,
-                    smooth_edges,
-                } => {
-                    draw.draw_line_with_thickness(
-                        *start,
-                        *end,
-                        *thickness,
-                        *smooth_edges,
-                        depth,
-                        color,
-                        additivity,
-                    );
-                }
-            };
+        if DEBUG_DRAW_ENABLE {
+            // Colliders
+            for (_entity, (xform, collider)) in &mut self.world.query::<(&Transform, &Collider)>() {
+                let color = if collider.collisions.len() > 0 {
+                    Color::red()
+                } else {
+                    Color::yellow()
+                };
+                draw.draw_circle_bresenham(
+                    xform.pos,
+                    collider.radius,
+                    DEPTH_DEBUG,
+                    color,
+                    ADDITIVITY_NONE,
+                );
+            }
         }
 
         //------------------------------------------------------------------------------------------
