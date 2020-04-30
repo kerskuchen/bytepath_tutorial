@@ -50,6 +50,27 @@ struct Transform {
 }
 
 #[derive(Debug, Copy, Clone)]
+struct TweenerScale {
+    pub timer_tween: TimerSimple,
+    pub scale_start: Vec2,
+    pub scale_end: Vec2,
+}
+impl TweenerScale {
+    fn new(scale_start: Vec2, scale_end: Vec2, scale_time: f32) -> TweenerScale {
+        TweenerScale {
+            timer_tween: TimerSimple::new_started(scale_time),
+            scale_start,
+            scale_end,
+        }
+    }
+    fn update(&mut self, drawable: &mut Drawable, deltatime: f32) {
+        self.timer_tween.update(deltatime);
+        let percentage = self.timer_tween.completion_ratio();
+        drawable.scale = Vec2::lerp(self.scale_start, self.scale_end, percentage);
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 struct Motion {
     pub vel: Vec2,
     pub acc: Vec2,
@@ -223,13 +244,6 @@ struct ExplodeParticle {
     pub thickness: f32,
     pub length: f32,
     pub speed: f32,
-    pub color: Color,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct TrailParticle {
-    pub timer_tween: TimerSimple,
-    pub size: f32,
     pub color: Color,
 }
 
@@ -596,25 +610,23 @@ impl Archetypes {
         size: f32,
         lifetime: f32,
         color: Color,
-    ) -> (Transform, AutoremoveTimer, TrailParticle, Drawable) {
+    ) -> (Transform, AutoremoveTimer, TweenerScale, Drawable) {
+        let scale_start = Vec2::filled(size);
+        let scale_end = Vec2::zero();
         (
             Transform {
                 pos,
                 dir_angle: 0.0,
             },
             AutoremoveTimer::new(lifetime),
-            TrailParticle {
-                timer_tween: TimerSimple::new_started(lifetime),
-                size,
-                color,
-            },
+            TweenerScale::new(scale_start, scale_end, lifetime),
             Drawable {
                 mesh: MeshType::Circle {
-                    radius: size,
+                    radius: 1.0,
                     filled: true,
                 },
                 pos_offset: Vec2::zero(),
-                scale: Vec2::ones(),
+                scale: scale_start,
                 depth: DEPTH_EFFECTS,
                 color,
                 additivity: ADDITIVITY_NONE,
@@ -1507,21 +1519,6 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // UPDATE TRAILPARTICLES
-
-        for (_entity, (trail, drawable)) in
-            &mut self.world.query::<(&mut TrailParticle, &mut Drawable)>()
-        {
-            trail.timer_tween.update(deltatime);
-            let percentage = trail.timer_tween.completion_ratio();
-            let radius = lerp(trail.size, 0.0, percentage);
-            drawable.mesh = MeshType::Circle {
-                radius,
-                filled: true,
-            };
-        }
-
-        //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
 
         for (entity, (xform, projectile)) in
@@ -1667,6 +1664,15 @@ impl Scene for SceneStage {
                     }
                 }
             }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // TWEENERS
+
+        for (_entity, (scaler, drawable)) in
+            &mut self.world.query::<(&mut TweenerScale, &mut Drawable)>()
+        {
+            scaler.update(drawable, deltatime);
         }
 
         //------------------------------------------------------------------------------------------
