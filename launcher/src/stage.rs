@@ -809,6 +809,7 @@ impl Archetypes {
         first_stage_duration: f32,
         second_stage_color: Color,
         second_stage_duration: f32,
+        filled: bool,
     ) -> (Transform, AutoremoveTimer, TweenColor, Drawable) {
         let lifetime = first_stage_duration + second_stage_duration;
         (
@@ -824,7 +825,7 @@ impl Archetypes {
                 mesh: MeshType::RectangleTransformed {
                     width: size,
                     height: size,
-                    filled: true,
+                    filled: filled,
                     centered: true,
                 },
                 pos_offset: Vec2::zero(),
@@ -1531,6 +1532,7 @@ impl Scene for SceneStage {
                     0.1,
                     COLOR_HP,
                     0.15,
+                    true,
                 ));
             }
         }
@@ -1563,6 +1565,7 @@ impl Scene for SceneStage {
                     0.1,
                     ammo.color,
                     0.15,
+                    true,
                 ));
 
                 for _ in 0..globals.random.gen_range(4, 8) {
@@ -1605,6 +1608,8 @@ impl Scene for SceneStage {
                 self.commands.remove_entity(entity);
                 if collected {
                     // Create collect effect
+
+                    // Inner
                     let entity = self.world.reserve_entity();
                     self.commands.add_component_bundle(
                         entity,
@@ -1616,10 +1621,33 @@ impl Scene for SceneStage {
                             0.2,
                             boost.color,
                             0.35,
+                            true,
                         ),
                     );
                     self.commands
                         .add_component(entity, Blinker::new(true, 0.2, 0.05));
+
+                    // Outer
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            1.0,
+                            45.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            boost.color,
+                            0.35,
+                            false,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                    self.commands.add_component(
+                        entity,
+                        TweenScale::new(boost.size, 2.5 * boost.size, 0.35, EasingType::CubicInOut),
+                    );
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
@@ -1630,6 +1658,7 @@ impl Scene for SceneStage {
                         0.1,
                         boost.color,
                         0.15,
+                        true,
                     ));
 
                     for _ in 0..globals.random.gen_range(4, 8) {
