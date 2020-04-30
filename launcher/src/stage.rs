@@ -81,6 +81,14 @@ struct MoveTowardsTarget {
 struct AutoremoveTimer {
     pub timer: TimerSimple,
 }
+impl AutoremoveTimer {
+    fn new(lifetime: f32) -> AutoremoveTimer {
+        AutoremoveTimer {
+            timer: TimerSimple::new_started(lifetime),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 struct AutoremoveTimerFrames {
     pub framecount_start: usize,
@@ -539,15 +547,23 @@ impl Archetypes {
         parent: Entity,
         pos_offset: Vec2,
         dir_angle_offset: f32,
-    ) -> (Transform, Muzzleflash, SnapToParent, Drawable) {
+    ) -> (
+        Transform,
+        AutoremoveTimer,
+        Muzzleflash,
+        SnapToParent,
+        Drawable,
+    ) {
         let initial_size = 8.0;
+        let lifetime = 0.1;
         (
             Transform {
                 pos: Vec2::zero(),
                 dir_angle: 0.0,
             },
+            AutoremoveTimer::new(lifetime),
             Muzzleflash {
-                timer_tween: TimerSimple::new_started(0.1),
+                timer_tween: TimerSimple::new_started(lifetime),
                 size: initial_size,
             },
             SnapToParent {
@@ -580,12 +596,13 @@ impl Archetypes {
         size: f32,
         lifetime: f32,
         color: Color,
-    ) -> (Transform, TrailParticle, Drawable) {
+    ) -> (Transform, AutoremoveTimer, TrailParticle, Drawable) {
         (
             Transform {
                 pos,
                 dir_angle: 0.0,
             },
+            AutoremoveTimer::new(lifetime),
             TrailParticle {
                 timer_tween: TimerSimple::new_started(lifetime),
                 size,
@@ -766,13 +783,13 @@ impl Archetypes {
         first_stage_duration: f32,
         second_stage_color: Color,
         second_stage_duration: f32,
-    ) -> (Transform, HitEffect, Drawable) {
+    ) -> (Transform, AutoremoveTimer, HitEffect, Drawable) {
+        let lifetime = first_stage_duration + second_stage_duration;
         (
             Transform { pos, dir_angle },
+            AutoremoveTimer::new(lifetime),
             HitEffect {
-                timer_stages: TimerSimple::new_started(
-                    first_stage_duration + second_stage_duration,
-                ),
+                timer_stages: TimerSimple::new_started(lifetime),
                 size,
                 first_stage_color,
                 first_stage_duration,
@@ -805,7 +822,13 @@ impl Archetypes {
         length: f32,
         lifetime: f32,
         color: Color,
-    ) -> (Transform, Motion, ExplodeParticle, Drawable) {
+    ) -> (
+        Transform,
+        Motion,
+        AutoremoveTimer,
+        ExplodeParticle,
+        Drawable,
+    ) {
         let dir = Vec2::from_angle_flipped_y(deg_to_rad(dir_angle));
         (
             Transform { pos, dir_angle },
@@ -815,6 +838,7 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
+            AutoremoveTimer::new(lifetime),
             ExplodeParticle {
                 timer_tween: TimerSimple::new_started(lifetime),
                 thickness,
@@ -840,9 +864,18 @@ impl Archetypes {
         )
     }
 
-    fn new_tick_effect(player_entity: Entity) -> (Transform, SnapToParent, TickEffect, Drawable) {
+    fn new_tick_effect(
+        player_entity: Entity,
+    ) -> (
+        Transform,
+        SnapToParent,
+        AutoremoveTimer,
+        TickEffect,
+        Drawable,
+    ) {
         let width = 32.0;
         let height = 48.0;
+        let lifetime = 0.13;
         (
             Transform {
                 pos: Vec2::zero(),
@@ -855,8 +888,9 @@ impl Archetypes {
                 dir_angle_snap: false,
                 dir_angle_offset: 0.0,
             },
+            AutoremoveTimer::new(lifetime),
             TickEffect {
-                timer_tween: TimerSimple::new_started(0.13),
+                timer_tween: TimerSimple::new_started(lifetime),
                 width,
                 height,
             },
@@ -1414,14 +1448,10 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE MUZZLEFLASH
 
-        for (effect_entity, (effect, drawable)) in
+        for (_entity, (effect, drawable)) in
             &mut self.world.query::<(&mut Muzzleflash, &mut Drawable)>()
         {
             effect.timer_tween.update(deltatime);
-            if effect.timer_tween.is_finished() {
-                self.commands.remove_entity(effect_entity);
-            }
-
             let percentage = easing::cubic_inout(effect.timer_tween.completion_ratio());
             let width = lerp(effect.size, 0.0, percentage);
             drawable.mesh = MeshType::RectangleTransformed {
@@ -1435,26 +1465,22 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE EXPLODE PARTICLES
 
-        for (particle_entity, (particle_xform, particle_motion, particle, drawable)) in &mut self
-            .world
-            .query::<(&Transform, &mut Motion, &mut ExplodeParticle, &mut Drawable)>()
+        for (_entity, (xform, motion, particle, drawable)) in
+            &mut self
+                .world
+                .query::<(&Transform, &mut Motion, &mut ExplodeParticle, &mut Drawable)>()
         {
             particle.timer_tween.update(deltatime);
-            if particle.timer_tween.is_finished() {
-                self.commands.remove_entity(particle_entity);
-            }
-
             let percentage = particle.timer_tween.completion_ratio();
             let length = lerp(particle.length, 0.0, percentage);
             let speed = lerp(particle.speed, 0.0, percentage);
-            let dir = Vec2::from_angle_flipped_y(deg_to_rad(particle_xform.dir_angle));
+            let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
 
-            particle_motion.vel =
-                speed * Vec2::from_angle_flipped_y(deg_to_rad(particle_xform.dir_angle));
+            motion.vel = speed * Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
 
             drawable.mesh = MeshType::LineWithThickness {
-                start: particle_xform.pos.pixel_snapped(),
-                end: particle_xform.pos.pixel_snapped() + length * dir,
+                start: xform.pos.pixel_snapped(),
+                end: xform.pos.pixel_snapped() + length * dir,
                 thickness: particle.thickness,
                 smooth_edges: false,
             };
@@ -1463,14 +1489,10 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE TICKEFFECT
 
-        for (entity, (tick, drawable)) in
+        for (_entity, (tick, drawable)) in
             &mut self.world.query::<(&mut TickEffect, &mut Drawable)>()
         {
             tick.timer_tween.update(deltatime);
-            if tick.timer_tween.is_finished() {
-                self.commands.remove_entity(entity);
-            }
-
             let percentage = easing::cubic_inout(tick.timer_tween.completion_ratio());
             let width = tick.width;
             let height = lerp(tick.height, 0.0, percentage);
@@ -1487,14 +1509,10 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE TRAILPARTICLES
 
-        for (entity, (trail, drawable)) in
+        for (_entity, (trail, drawable)) in
             &mut self.world.query::<(&mut TrailParticle, &mut Drawable)>()
         {
             trail.timer_tween.update(deltatime);
-            if trail.timer_tween.is_finished() {
-                self.commands.remove_entity(entity);
-            }
-
             let percentage = trail.timer_tween.completion_ratio();
             let radius = lerp(trail.size, 0.0, percentage);
             drawable.mesh = MeshType::Circle {
@@ -1528,13 +1546,9 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE HIT EFFECTS
 
-        for (entity, (hit, drawable)) in &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
+        for (_entity, (hit, drawable)) in &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
         {
             hit.timer_stages.update(deltatime);
-            if hit.timer_stages.is_finished() {
-                self.commands.remove_entity(entity);
-            }
-
             let color = if hit.timer_stages.time_cur < hit.first_stage_duration {
                 hit.first_stage_color
             } else {
