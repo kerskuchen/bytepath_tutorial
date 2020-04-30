@@ -76,6 +76,33 @@ struct MoveTowardsTarget {
     pub target: Entity,
     pub follow_precision_percent: f32,
 }
+
+#[derive(Debug, Copy, Clone)]
+struct AutoremoveTimer {
+    pub timer: TimerSimple,
+}
+#[derive(Debug, Copy, Clone)]
+struct AutoremoveTimerFrames {
+    pub framecount_start: usize,
+    pub framecount_left: usize,
+}
+impl AutoremoveTimerFrames {
+    fn new(framecount: usize) -> AutoremoveTimerFrames {
+        AutoremoveTimerFrames {
+            framecount_start: framecount,
+            framecount_left: framecount,
+        }
+    }
+    fn update_and_check_if_finished(&mut self) -> bool {
+        if self.framecount_left > 0 {
+            self.framecount_left -= 1;
+            false
+        } else {
+            true
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 struct Blinker {
     pub repeat_timer: TriggerRepeating,
@@ -152,11 +179,6 @@ struct Boost {
 struct SlowMotion {
     pub timer_tween: TimerSimple,
     pub deltatime_speed_factor: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Screenflash {
-    pub framecount_duration: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -488,11 +510,9 @@ impl Archetypes {
     fn new_screenflash(
         canvas_width: f32,
         canvas_height: f32,
-    ) -> (Screenflash, Transform, Drawable) {
+    ) -> (AutoremoveTimerFrames, Transform, Drawable) {
         (
-            Screenflash {
-                framecount_duration: 4,
-            },
+            AutoremoveTimerFrames::new(4),
             Transform {
                 pos: Vec2::zero(),
                 dir_angle: 0.0,
@@ -1048,12 +1068,18 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // UPDATE SCREENFLASH
-        for (flash_entity, flash) in &mut self.world.query::<&mut Screenflash>() {
-            if flash.framecount_duration > 0 {
-                flash.framecount_duration -= 1;
-            } else {
-                self.commands.remove_entity(flash_entity);
+        // AUTO-REMOVE ENTITIES
+
+        for (entity, autoremove_timer) in &mut self.world.query::<&mut AutoremoveTimer>() {
+            autoremove_timer.timer.update(deltatime);
+            if autoremove_timer.timer.is_finished() {
+                self.commands.remove_entity(entity);
+            }
+        }
+
+        for (entity, autoremove_timer) in &mut self.world.query::<&mut AutoremoveTimerFrames>() {
+            if autoremove_timer.update_and_check_if_finished() {
+                self.commands.remove_entity(entity);
             }
         }
 
@@ -1676,6 +1702,7 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // CREATE / DELETE ENTITIES
+
         self.commands.execute(&mut self.world);
     }
 }
