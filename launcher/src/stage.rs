@@ -52,21 +52,28 @@ struct Transform {
 #[derive(Debug, Copy, Clone)]
 struct TweenerScale {
     pub timer_tween: TimerSimple,
-    pub scale_start: Vec2,
-    pub scale_end: Vec2,
+    pub scale_start: f32,
+    pub scale_end: f32,
+    pub easing_type: EasingType,
 }
 impl TweenerScale {
-    fn new(scale_start: Vec2, scale_end: Vec2, scale_time: f32) -> TweenerScale {
+    fn new(
+        scale_start: f32,
+        scale_end: f32,
+        scale_time: f32,
+        easing_type: EasingType,
+    ) -> TweenerScale {
         TweenerScale {
             timer_tween: TimerSimple::new_started(scale_time),
             scale_start,
             scale_end,
+            easing_type,
         }
     }
     fn update(&mut self, drawable: &mut Drawable, deltatime: f32) {
         self.timer_tween.update(deltatime);
-        let percentage = self.timer_tween.completion_ratio();
-        drawable.scale = Vec2::lerp(self.scale_start, self.scale_end, percentage);
+        let percentage = ease(self.timer_tween.completion_ratio(), self.easing_type);
+        drawable.scale = Vec2::filled(lerp(self.scale_start, self.scale_end, percentage));
     }
 }
 
@@ -215,12 +222,6 @@ struct TickEffect {
     pub timer_tween: TimerSimple,
     pub width: f32,
     pub height: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Muzzleflash {
-    pub timer_tween: TimerSimple,
-    pub size: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -564,7 +565,7 @@ impl Archetypes {
     ) -> (
         Transform,
         AutoremoveTimer,
-        Muzzleflash,
+        TweenerScale,
         SnapToParent,
         Drawable,
     ) {
@@ -576,10 +577,7 @@ impl Archetypes {
                 dir_angle: 0.0,
             },
             AutoremoveTimer::new(lifetime),
-            Muzzleflash {
-                timer_tween: TimerSimple::new_started(lifetime),
-                size: initial_size,
-            },
+            TweenerScale::new(initial_size, 0.0, lifetime, EasingType::CubicInOut),
             SnapToParent {
                 parent,
                 pos_snap: true,
@@ -589,8 +587,8 @@ impl Archetypes {
             },
             Drawable {
                 mesh: MeshType::RectangleTransformed {
-                    width: initial_size,
-                    height: initial_size,
+                    width: 1.0,
+                    height: 1.0,
                     filled: true,
                     centered: true,
                 },
@@ -611,22 +609,20 @@ impl Archetypes {
         lifetime: f32,
         color: Color,
     ) -> (Transform, AutoremoveTimer, TweenerScale, Drawable) {
-        let scale_start = Vec2::filled(size);
-        let scale_end = Vec2::zero();
         (
             Transform {
                 pos,
                 dir_angle: 0.0,
             },
             AutoremoveTimer::new(lifetime),
-            TweenerScale::new(scale_start, scale_end, lifetime),
+            TweenerScale::new(size, 0.0, lifetime, EasingType::Linear),
             Drawable {
                 mesh: MeshType::Circle {
                     radius: 1.0,
                     filled: true,
                 },
                 pos_offset: Vec2::zero(),
-                scale: scale_start,
+                scale: Vec2::filled(size),
                 depth: DEPTH_EFFECTS,
                 color,
                 additivity: ADDITIVITY_NONE,
@@ -1455,23 +1451,6 @@ impl Scene for SceneStage {
                     ));
                 }
             }
-        }
-
-        //------------------------------------------------------------------------------------------
-        // UPDATE MUZZLEFLASH
-
-        for (_entity, (effect, drawable)) in
-            &mut self.world.query::<(&mut Muzzleflash, &mut Drawable)>()
-        {
-            effect.timer_tween.update(deltatime);
-            let percentage = easing::cubic_inout(effect.timer_tween.completion_ratio());
-            let width = lerp(effect.size, 0.0, percentage);
-            drawable.mesh = MeshType::RectangleTransformed {
-                width: width,
-                height: width,
-                filled: true,
-                centered: true,
-            };
         }
 
         //------------------------------------------------------------------------------------------
