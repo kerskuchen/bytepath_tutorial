@@ -50,21 +50,49 @@ struct Transform {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct TweenerScale {
+struct TweenColor {
+    pub timer_tween: TimerSimple,
+    pub color_start: Color,
+    pub color_end: Color,
+    pub easing_type: EasingType,
+}
+impl TweenColor {
+    fn new(
+        color_start: Color,
+        color_end: Color,
+        tween_time: f32,
+        easing_type: EasingType,
+    ) -> TweenColor {
+        TweenColor {
+            timer_tween: TimerSimple::new_started(tween_time),
+            color_start,
+            color_end,
+            easing_type,
+        }
+    }
+    fn update(&mut self, drawable: &mut Drawable, deltatime: f32) {
+        self.timer_tween.update(deltatime);
+        let percentage = ease(self.timer_tween.completion_ratio(), self.easing_type);
+        drawable.color = Color::lerp(self.color_start, self.color_end, percentage);
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct TweenScale {
     pub timer_tween: TimerSimple,
     pub scale_start: f32,
     pub scale_end: f32,
     pub easing_type: EasingType,
 }
-impl TweenerScale {
+impl TweenScale {
     fn new(
         scale_start: f32,
         scale_end: f32,
-        scale_time: f32,
+        tween_time: f32,
         easing_type: EasingType,
-    ) -> TweenerScale {
-        TweenerScale {
-            timer_tween: TimerSimple::new_started(scale_time),
+    ) -> TweenScale {
+        TweenScale {
+            timer_tween: TimerSimple::new_started(tween_time),
             scale_start,
             scale_end,
             easing_type,
@@ -227,16 +255,6 @@ struct TickEffect {
 #[derive(Debug, Copy, Clone)]
 struct Projectile {
     pub size: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct HitEffect {
-    pub timer_stages: TimerSimple,
-    pub size: f32,
-    pub first_stage_color: Color,
-    pub first_stage_duration: f32,
-    pub second_stage_color: Color,
-    pub second_stage_duration: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -565,7 +583,7 @@ impl Archetypes {
     ) -> (
         Transform,
         AutoremoveTimer,
-        TweenerScale,
+        TweenScale,
         SnapToParent,
         Drawable,
     ) {
@@ -577,7 +595,7 @@ impl Archetypes {
                 dir_angle: 0.0,
             },
             AutoremoveTimer::new(lifetime),
-            TweenerScale::new(initial_size, 0.0, lifetime, EasingType::CubicInOut),
+            TweenScale::new(initial_size, 0.0, lifetime, EasingType::CubicInOut),
             SnapToParent {
                 parent,
                 pos_snap: true,
@@ -608,14 +626,14 @@ impl Archetypes {
         size: f32,
         lifetime: f32,
         color: Color,
-    ) -> (Transform, AutoremoveTimer, TweenerScale, Drawable) {
+    ) -> (Transform, AutoremoveTimer, TweenScale, Drawable) {
         (
             Transform {
                 pos,
                 dir_angle: 0.0,
             },
             AutoremoveTimer::new(lifetime),
-            TweenerScale::new(size, 0.0, lifetime, EasingType::Linear),
+            TweenScale::new(size, 0.0, lifetime, EasingType::Linear),
             Drawable {
                 mesh: MeshType::Circle {
                     radius: 1.0,
@@ -791,19 +809,17 @@ impl Archetypes {
         first_stage_duration: f32,
         second_stage_color: Color,
         second_stage_duration: f32,
-    ) -> (Transform, AutoremoveTimer, HitEffect, Drawable) {
+    ) -> (Transform, AutoremoveTimer, TweenColor, Drawable) {
         let lifetime = first_stage_duration + second_stage_duration;
         (
             Transform { pos, dir_angle },
             AutoremoveTimer::new(lifetime),
-            HitEffect {
-                timer_stages: TimerSimple::new_started(lifetime),
-                size,
+            TweenColor::new(
                 first_stage_color,
-                first_stage_duration,
                 second_stage_color,
-                second_stage_duration,
-            },
+                first_stage_duration,
+                EasingType::StepEnd,
+            ),
             Drawable {
                 mesh: MeshType::RectangleTransformed {
                     width: size,
@@ -1520,20 +1536,6 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // UPDATE HIT EFFECTS
-
-        for (_entity, (hit, drawable)) in &mut self.world.query::<(&mut HitEffect, &mut Drawable)>()
-        {
-            hit.timer_stages.update(deltatime);
-            let color = if hit.timer_stages.time_cur < hit.first_stage_duration {
-                hit.first_stage_color
-            } else {
-                hit.second_stage_color
-            };
-            drawable.color = color;
-        }
-
-        //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
         for (entity, (xform, ammo, move_to_target, collider)) in
@@ -1648,10 +1650,16 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // TWEENERS
 
-        for (_entity, (scaler, drawable)) in
-            &mut self.world.query::<(&mut TweenerScale, &mut Drawable)>()
+        for (_entity, (tween_scale, drawable)) in
+            &mut self.world.query::<(&mut TweenScale, &mut Drawable)>()
         {
-            scaler.update(drawable, deltatime);
+            tween_scale.update(drawable, deltatime);
+        }
+
+        for (_entity, (tween_color, drawable)) in
+            &mut self.world.query::<(&mut TweenColor, &mut Drawable)>()
+        {
+            tween_color.update(drawable, deltatime);
         }
 
         //------------------------------------------------------------------------------------------
