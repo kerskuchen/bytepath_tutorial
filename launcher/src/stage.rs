@@ -252,6 +252,13 @@ struct Player {
 }
 
 #[derive(Debug, Copy, Clone)]
+struct Skillpoints {
+    pub size: f32,
+    pub color: Color,
+    pub skillpoint_amount: usize,
+}
+
+#[derive(Debug, Copy, Clone)]
 struct Ammo {
     pub size: f32,
     pub color: Color,
@@ -862,6 +869,69 @@ impl Archetypes {
         )
     }
 
+    fn new_skillpoints(
+        pos: Vec2,
+        vel: Vec2,
+        dir_angle: f32,
+        dir_angle_vel: f32,
+    ) -> (Transform, Motion, Skillpoints, Collider, DrawableMulti) {
+        let size = 12.0;
+        (
+            Transform { pos, dir_angle },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel,
+                dir_angle_acc: 0.0,
+            },
+            Skillpoints {
+                size,
+                color: COLOR_SKILL_POINT,
+                skillpoint_amount: 1,
+            },
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
+            },
+            DrawableMulti {
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 1.0 * size,
+                            height: 1.0 * size,
+                            filled: false,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_SKILL_POINT,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 0.25 * size,
+                            height: 0.25 * size,
+                            filled: true,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_SKILL_POINT,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                ],
+            },
+        )
+    }
+
     fn new_boost(
         pos: Vec2,
         vel: Vec2,
@@ -1296,6 +1366,8 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
 // Stage Scene
 
 pub struct SceneStage {
+    skillpoint_count: usize,
+
     gui_font: SpriteFont,
     world: World,
     commands: WorldCommandBuffer,
@@ -1322,6 +1394,7 @@ impl SceneStage {
         let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
 
         SceneStage {
+            skillpoint_count: 0,
             gui_font: draw.get_font("default_tiny"),
             world,
             player: Some(player),
@@ -1541,6 +1614,28 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // SPAWN SKILLPOINTS
+
+        if input.keyboard.is_down(Scancode::S) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+            self.world.spawn(Archetypes::new_skillpoints(
+                pos,
+                vel,
+                globals.random.f32_in_range_closed(0.0, 360.0),
+                globals.random.f32_in_range_closed(-360.0, 360.0),
+            ));
+        }
+
+        //------------------------------------------------------------------------------------------
         // SPAWN HEALTH
 
         if input.keyboard.is_down(Scancode::H) {
@@ -1589,6 +1684,11 @@ impl Scene for SceneStage {
                         0.0,
                         player.hp_max,
                     );
+                }
+                if let Some(skillpoint_component) =
+                    self.world.get::<Skillpoints>(collision_entity).ok()
+                {
+                    self.skillpoint_count += skillpoint_component.skillpoint_amount;
                 }
             }
 
@@ -1873,6 +1973,20 @@ impl Scene for SceneStage {
 
             if remove_self {
                 self.commands.remove_entity(entity);
+
+                // Particles
+                for _ in 0..globals.random.gen_range(4, 8) {
+                    self.commands.add_entity(Archetypes::new_explode_particle(
+                        xform.pos,
+                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                        globals.random.f32_in_range_closed(50.0, 100.0),
+                        globals.random.f32_in_range_closed(1.0, 2.0),
+                        globals.random.f32_in_range_closed(3.0, 8.0),
+                        globals.random.f32_in_range_closed(0.3, 0.5),
+                        boost.color,
+                    ));
+                }
+
                 if collected {
                     // Create collect effect
 
@@ -1919,7 +2033,7 @@ impl Scene for SceneStage {
                     );
 
                     let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                    infotext_create_buffer.push(InfoText::new(text_pos, "+BOOST", COLOR_BOOST));
+                    infotext_create_buffer.push(InfoText::new(text_pos, "+BOOST", boost.color));
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
@@ -1933,22 +2047,120 @@ impl Scene for SceneStage {
                         0.15,
                         true,
                     ));
-
-                    for _ in 0..globals.random.gen_range(4, 8) {
-                        self.commands.add_entity(Archetypes::new_explode_particle(
-                            xform.pos,
-                            rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                            globals.random.f32_in_range_closed(50.0, 100.0),
-                            globals.random.f32_in_range_closed(1.0, 2.0),
-                            globals.random.f32_in_range_closed(3.0, 8.0),
-                            globals.random.f32_in_range_closed(0.3, 0.5),
-                            boost.color,
-                        ));
-                    }
                 }
             }
         }
 
+        //------------------------------------------------------------------------------------------
+        // UPDATE SKILLPOINTS
+
+        for (entity, (xform, motion, skillpoints, collider)) in
+            &mut self
+                .world
+                .query::<(&Transform, &Motion, &mut Skillpoints, &Collider)>()
+        {
+            // Check if entity needs to be removed from game
+            let mut remove_self = false;
+            let mut collected = false;
+            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
+                remove_self = true;
+            }
+            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
+                remove_self = true;
+            }
+            if !collider.collisions.is_empty() {
+                remove_self = true;
+                collected = true;
+            }
+
+            if remove_self {
+                self.commands.remove_entity(entity);
+
+                // Particles
+                for _ in 0..globals.random.gen_range(4, 8) {
+                    self.commands.add_entity(Archetypes::new_explode_particle(
+                        xform.pos,
+                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                        globals.random.f32_in_range_closed(50.0, 100.0),
+                        globals.random.f32_in_range_closed(1.0, 2.0),
+                        globals.random.f32_in_range_closed(3.0, 8.0),
+                        globals.random.f32_in_range_closed(0.3, 0.5),
+                        skillpoints.color,
+                    ));
+                }
+
+                if collected {
+                    // Create collect effect
+
+                    // Inner
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            skillpoints.size,
+                            skillpoints.size,
+                            45.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            skillpoints.color,
+                            0.35,
+                            true,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+
+                    // Outer
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            1.0,
+                            1.0,
+                            45.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            skillpoints.color,
+                            0.35,
+                            false,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                    self.commands.add_component(
+                        entity,
+                        TweenScale::new(
+                            skillpoints.size,
+                            2.5 * skillpoints.size,
+                            0.35,
+                            EasingType::CubicInOut,
+                        ),
+                    );
+
+                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                    infotext_create_buffer.push(InfoText::new(
+                        text_pos,
+                        "+1 SP",
+                        skillpoints.color,
+                    ));
+                } else {
+                    // Create explode effect
+                    self.commands.add_entity(Archetypes::new_hit_effect(
+                        xform.pos,
+                        skillpoints.size,
+                        skillpoints.size,
+                        45.0,
+                        COLOR_DEFAULT,
+                        0.1,
+                        skillpoints.color,
+                        0.15,
+                        true,
+                    ));
+                }
+            }
+        }
         //------------------------------------------------------------------------------------------
         // UPDATE HEALTH
 
