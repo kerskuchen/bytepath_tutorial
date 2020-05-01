@@ -1662,6 +1662,8 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE AMMO
 
+        let mut infotext_create_buffer: Vec<InfoText> = Vec::new();
+
         for (entity, (xform, ammo, move_to_target, collider)) in
             &mut self
                 .world
@@ -1772,8 +1774,7 @@ impl Scene for SceneStage {
                     );
 
                     let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                    self.commands
-                        .add_entity((InfoText::new(text_pos, "+BOOST", COLOR_BOOST),));
+                    infotext_create_buffer.push(InfoText::new(text_pos, "+BOOST", COLOR_BOOST));
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
@@ -1877,6 +1878,38 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // CREATE / DELETE ENTITIES
+
+        // INFOTEXT CREATION
+        for mut infotext_to_create in infotext_create_buffer.drain(..) {
+            // Collect existing infotext bounding boxes
+            let text_rects_existing: Vec<Recti> = {
+                let mut result = Vec::new();
+                for (_entity, infotext) in &mut self.world.query::<&InfoText>() {
+                    let infotext: &InfoText = infotext;
+                    let text: String = infotext.text.iter().collect();
+                    let rect = self
+                        .gui_font
+                        .get_text_bounding_rect(&text, 1)
+                        .translated_by(infotext.pos.pixel_snapped_i32());
+                    result.push(rect);
+                }
+                result
+            };
+
+            // Check our bounding box against existing ones so that it does not overlap with
+            // any existing
+            let text_rect = {
+                let text: String = infotext_to_create.text.iter().collect();
+                self.gui_font
+                    .get_text_bounding_rect(&text, 1)
+                    .translated_by(infotext_to_create.pos.pixel_snapped_i32())
+            };
+            infotext_to_create.pos = text_rect
+                .get_closest_position_without_overlapping(&text_rects_existing)
+                .into();
+
+            self.world.spawn((infotext_to_create,));
+        }
 
         self.commands.execute(&mut self.world);
     }
