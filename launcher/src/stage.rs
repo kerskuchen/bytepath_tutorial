@@ -266,6 +266,13 @@ struct Boost {
 }
 
 #[derive(Debug, Copy, Clone)]
+struct Health {
+    pub size: f32,
+    pub color: Color,
+    pub health_amount: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
 struct SlowMotion {
     pub timer_tween: TimerSimple,
     pub deltatime_speed_factor: f32,
@@ -918,9 +925,84 @@ impl Archetypes {
         )
     }
 
+    fn new_health(pos: Vec2, vel: Vec2) -> (Transform, Motion, Health, Collider, DrawableMulti) {
+        let size = 10.0;
+        (
+            Transform {
+                pos,
+                dir_angle: 0.0,
+            },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel: 0.0,
+                dir_angle_acc: 0.0,
+            },
+            Health {
+                size,
+                color: COLOR_HP,
+                health_amount: 25.0,
+            },
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
+            },
+            DrawableMulti {
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: size,
+                            height: size / 3.0,
+                            filled: true,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_HP,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: size / 3.0,
+                            height: size,
+                            filled: true,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_HP,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                    Drawable {
+                        mesh: MeshType::Circle {
+                            radius: size,
+                            filled: false,
+                        },
+                        pos_offset: Vec2::zero(),
+                        scale: Vec2::ones(),
+                        color: COLOR_DEFAULT,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                ],
+            },
+        )
+    }
+
     fn new_hit_effect(
         pos: Vec2,
-        size: f32,
+        width: f32,
+        height: f32,
         dir_angle: f32,
         first_stage_color: Color,
         first_stage_duration: f32,
@@ -940,11 +1022,46 @@ impl Archetypes {
             ),
             Drawable {
                 mesh: MeshType::RectangleTransformed {
-                    width: size,
-                    height: size,
-                    filled: filled,
+                    width,
+                    height,
+                    filled,
                     centered: true,
                 },
+                pos_offset: Vec2::zero(),
+                scale: Vec2::ones(),
+                color: first_stage_color,
+                additivity: ADDITIVITY_NONE,
+                depth: DEPTH_EFFECTS,
+                add_jitter: false,
+                visible: true,
+            },
+        )
+    }
+
+    fn new_hit_effect_round(
+        pos: Vec2,
+        radius: f32,
+        first_stage_color: Color,
+        first_stage_duration: f32,
+        second_stage_color: Color,
+        second_stage_duration: f32,
+        filled: bool,
+    ) -> (Transform, AutoremoveTimer, TweenColor, Drawable) {
+        let lifetime = first_stage_duration + second_stage_duration;
+        (
+            Transform {
+                pos,
+                dir_angle: 0.0,
+            },
+            AutoremoveTimer::new(lifetime),
+            TweenColor::new(
+                first_stage_color,
+                second_stage_color,
+                first_stage_duration,
+                EasingType::StepEnd,
+            ),
+            Drawable {
+                mesh: MeshType::Circle { radius, filled },
                 pos_offset: Vec2::zero(),
                 scale: Vec2::ones(),
                 color: first_stage_color,
@@ -1424,6 +1541,23 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // SPAWN HEALTH
+
+        if input.keyboard.is_down(Scancode::H) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+            self.world.spawn(Archetypes::new_health(pos, vel));
+        }
+
+        //------------------------------------------------------------------------------------------
         // UPDATE PLAYER
 
         for (player_entity, (player_xform, player_motion, player, collider)) in &mut self
@@ -1448,6 +1582,13 @@ impl Scene for SceneStage {
                         player.boost_allowed = true;
                         player.boost_cooldown_timer.stop();
                     }
+                }
+                if let Some(health_component) = self.world.get::<Health>(collision_entity).ok() {
+                    player.hp = clampf(
+                        player.hp + health_component.health_amount,
+                        0.0,
+                        player.hp_max,
+                    );
                 }
             }
 
@@ -1649,6 +1790,7 @@ impl Scene for SceneStage {
                 self.commands.add_entity(Archetypes::new_hit_effect(
                     xform.pos.clamped_to_rect(canvas_rect),
                     3.0 * projectile.size,
+                    3.0 * projectile.size,
                     0.0,
                     COLOR_DEFAULT,
                     0.1,
@@ -1683,6 +1825,7 @@ impl Scene for SceneStage {
                 self.commands.remove_entity(entity);
                 self.commands.add_entity(Archetypes::new_hit_effect(
                     xform.pos,
+                    ammo.size,
                     ammo.size,
                     45.0,
                     COLOR_DEFAULT,
@@ -1740,6 +1883,7 @@ impl Scene for SceneStage {
                         Archetypes::new_hit_effect(
                             xform.pos,
                             boost.size,
+                            boost.size,
                             45.0,
                             COLOR_DEFAULT,
                             0.2,
@@ -1757,6 +1901,7 @@ impl Scene for SceneStage {
                         entity,
                         Archetypes::new_hit_effect(
                             xform.pos,
+                            1.0,
                             1.0,
                             45.0,
                             COLOR_DEFAULT,
@@ -1780,6 +1925,7 @@ impl Scene for SceneStage {
                     self.commands.add_entity(Archetypes::new_hit_effect(
                         xform.pos,
                         boost.size,
+                        boost.size,
                         45.0,
                         COLOR_DEFAULT,
                         0.1,
@@ -1796,9 +1942,132 @@ impl Scene for SceneStage {
                             globals.random.f32_in_range_closed(1.0, 2.0),
                             globals.random.f32_in_range_closed(3.0, 8.0),
                             globals.random.f32_in_range_closed(0.3, 0.5),
-                            COLOR_AMMO,
+                            boost.color,
                         ));
                     }
+                }
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // UPDATE HEALTH
+
+        for (entity, (xform, motion, health, collider)) in
+            &mut self
+                .world
+                .query::<(&Transform, &Motion, &mut Health, &Collider)>()
+        {
+            // Check if entity needs to be removed from game
+            let mut remove_self = false;
+            let mut collected = false;
+            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
+                remove_self = true;
+            }
+            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
+                remove_self = true;
+            }
+            if !collider.collisions.is_empty() {
+                remove_self = true;
+                collected = true;
+            }
+
+            if remove_self {
+                self.commands.remove_entity(entity);
+
+                // Particles
+                for _ in 0..globals.random.gen_range(4, 8) {
+                    self.commands.add_entity(Archetypes::new_explode_particle(
+                        xform.pos,
+                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                        globals.random.f32_in_range_closed(50.0, 100.0),
+                        globals.random.f32_in_range_closed(1.0, 2.0),
+                        globals.random.f32_in_range_closed(3.0, 8.0),
+                        globals.random.f32_in_range_closed(0.3, 0.5),
+                        health.color,
+                    ));
+                }
+                if collected {
+                    // Create collect effect
+
+                    // Inner vertical
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            1.2 * health.size / 3.0,
+                            1.2 * health.size,
+                            0.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            health.color,
+                            0.35,
+                            true,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+
+                    // Inner horizontal
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect(
+                            xform.pos,
+                            1.2 * health.size,
+                            1.2 * health.size / 3.0,
+                            0.0,
+                            COLOR_DEFAULT,
+                            0.2,
+                            health.color,
+                            0.35,
+                            true,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+
+                    // Outer
+                    let entity = self.world.reserve_entity();
+                    self.commands.add_component_bundle(
+                        entity,
+                        Archetypes::new_hit_effect_round(
+                            xform.pos,
+                            1.0,
+                            health.color,
+                            0.2,
+                            COLOR_DEFAULT,
+                            0.35,
+                            false,
+                        ),
+                    );
+                    self.commands
+                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                    self.commands.add_component(
+                        entity,
+                        TweenScale::new(
+                            1.2 * health.size,
+                            1.7 * health.size,
+                            0.35,
+                            EasingType::CubicInOut,
+                        ),
+                    );
+
+                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                    infotext_create_buffer.push(InfoText::new(text_pos, "+HP", COLOR_HP));
+                } else {
+                    // Create explode effect
+                    self.commands.add_entity(Archetypes::new_hit_effect(
+                        xform.pos,
+                        health.size,
+                        health.size,
+                        45.0,
+                        COLOR_DEFAULT,
+                        0.1,
+                        health.color,
+                        0.15,
+                        true,
+                    ));
                 }
             }
         }
