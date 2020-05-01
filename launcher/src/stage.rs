@@ -19,12 +19,57 @@ const DEPTH_INFOTEXT: Depth = 35.0;
 const DEPTH_SCREENFLASH: Depth = 60.0;
 
 // TODO: When f32 gets const functions we can just use from_rgb_bytes instead of this monstrosity
-const COLOR_DEFAULT: Color = Color::from_rgb(222.0 / 255.0, 222.0 / 255.0, 222.0 / 255.0);
 const COLOR_BACKGROUND: Color = Color::from_rgb(16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0);
+const COLOR_DEFAULT: Color = Color::from_rgb(222.0 / 255.0, 222.0 / 255.0, 222.0 / 255.0);
 const COLOR_AMMO: Color = Color::from_rgb(123.0 / 255.0, 200.0 / 255.0, 164.0 / 255.0);
 const COLOR_BOOST: Color = Color::from_rgb(76.0 / 255.0, 195.0 / 255.0, 217.0 / 255.0);
 const COLOR_HP: Color = Color::from_rgb(241.0 / 255.0, 103.0 / 255.0, 69.0 / 255.0);
 const COLOR_SKILL_POINT: Color = Color::from_rgb(255.0 / 255.0, 198.0 / 255.0, 93.0 / 255.0);
+
+const COLOR_NEGATIVE_DEFAULT: Color = Color::from_rgb(
+    1.0 - 222.0 / 255.0,
+    1.0 - 222.0 / 255.0,
+    1.0 - 222.0 / 255.0,
+);
+const COLOR_NEGATIVE_AMMO: Color = Color::from_rgb(
+    1.0 - 123.0 / 255.0,
+    1.0 - 200.0 / 255.0,
+    1.0 - 164.0 / 255.0,
+);
+const COLOR_NEGATIVE_BOOST: Color =
+    Color::from_rgb(1.0 - 76.0 / 255.0, 1.0 - 195.0 / 255.0, 1.0 - 217.0 / 255.0);
+const COLOR_NEGATIVE_HP: Color =
+    Color::from_rgb(1.0 - 241.0 / 255.0, 1.0 - 103.0 / 255.0, 1.0 - 69.0 / 255.0);
+const COLOR_NEGATIVE_SKILL_POINT: Color =
+    Color::from_rgb(255.0 / 255.0, 198.0 / 255.0, 93.0 / 255.0);
+
+const COLORS: [Color; 5] = [
+    COLOR_DEFAULT,
+    COLOR_HP,
+    COLOR_AMMO,
+    COLOR_BOOST,
+    COLOR_SKILL_POINT,
+];
+const COLORS_NEGATIVE: [Color; 5] = [
+    COLOR_NEGATIVE_DEFAULT,
+    COLOR_NEGATIVE_HP,
+    COLOR_NEGATIVE_AMMO,
+    COLOR_NEGATIVE_BOOST,
+    COLOR_NEGATIVE_SKILL_POINT,
+];
+
+const COLORS_ALL: [Color; 10] = [
+    COLOR_DEFAULT,
+    COLOR_HP,
+    COLOR_AMMO,
+    COLOR_BOOST,
+    COLOR_SKILL_POINT,
+    COLOR_NEGATIVE_DEFAULT,
+    COLOR_NEGATIVE_HP,
+    COLOR_NEGATIVE_AMMO,
+    COLOR_NEGATIVE_BOOST,
+    COLOR_NEGATIVE_SKILL_POINT,
+];
 
 type CollisionMask = u64;
 const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
@@ -502,49 +547,22 @@ impl InfoText {
 
         // Change text characters and colors randomly
         if self.char_switcher.update_and_check(deltatime) {
-            // Change characters
             let random_ascii_chars = " 0123456789!@#$%&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ".as_bytes();
             for ascii_char in self.text.iter_mut() {
-                if random.gen_bool(1.0 / 20.0) {
+                if random.gen_bool(0.2) {
                     *ascii_char = random.pick_from_slice(random_ascii_chars) as char;
                 }
             }
-
-            // Change colors
-            let colors = {
-                let mut colors_default = vec![
-                    COLOR_DEFAULT,
-                    COLOR_HP,
-                    COLOR_AMMO,
-                    COLOR_BOOST,
-                    COLOR_SKILL_POINT,
-                ];
-                let mut colors_negative: Vec<Color> = colors_default
-                    .iter()
-                    .map(|&color| {
-                        let mut result = color;
-                        result.r = 1.0 - result.r;
-                        result.g = 1.0 - result.g;
-                        result.b = 1.0 - result.b;
-                        result
-                    })
-                    .collect();
-
-                let mut result = Vec::new();
-                result.append(&mut colors_default);
-                result.append(&mut colors_negative);
-                result
-            };
             for color in self.text_color_foreground.iter_mut() {
-                if random.gen_bool(1.0 / 5.0) {
-                    *color = random.pick_from_slice(&colors)
+                if random.gen_bool(0.05) {
+                    *color = random.pick_from_slice(&COLORS_ALL)
                 } else {
                     *color = self.color;
                 }
             }
             for color in self.text_color_background.iter_mut() {
-                if random.gen_bool(1.0 / 10.0) {
-                    *color = random.pick_from_slice(&colors)
+                if random.gen_bool(0.3) {
+                    *color = random.pick_from_slice(&COLORS_ALL)
                 } else {
                     *color = Color::transparent();
                 }
