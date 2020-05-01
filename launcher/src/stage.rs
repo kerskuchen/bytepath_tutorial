@@ -466,14 +466,14 @@ struct InfoText {
     pub blinker: Blinker,
     pub char_switcher: TriggerRepeating,
     pub color: Color,
-    pub text: Vec<u8>,
+    pub text: Vec<char>,
     pub text_color_foreground: Vec<Color>,
     pub text_color_background: Vec<Color>,
 }
 impl InfoText {
     fn new(pos: Vec2, text: &str, color: Color) -> InfoText {
         assert!(text.is_ascii());
-        let text: Vec<u8> = text.as_bytes().into();
+        let text: Vec<char> = text.chars().collect();
         let text_color_foreground = vec![color; text.len()];
         let text_color_background = vec![Color::transparent(); text.len()];
 
@@ -503,11 +503,10 @@ impl InfoText {
         // Change text characters and colors randomly
         if self.char_switcher.update_and_check(deltatime) {
             // Change characters
-            let random_ascii_chars = "0123456789!@#$%\"&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ";
-            debug_assert!(random_ascii_chars.is_ascii());
-            for ascii_char in self.text.iter_mut().skip(1) {
+            let random_ascii_chars = " 0123456789!@#$%&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ".as_bytes();
+            for ascii_char in self.text.iter_mut() {
                 if random.gen_bool(1.0 / 20.0) {
-                    *ascii_char = random.pick_from_slice(random_ascii_chars.as_bytes());
+                    *ascii_char = random.pick_from_slice(random_ascii_chars) as char;
                 }
             }
 
@@ -557,7 +556,7 @@ impl InfoText {
         if visible {
             for (index, &character) in self.text.iter().enumerate() {
                 text_offset = draw.draw_text(
-                    &(character as char).to_string(),
+                    &character.to_string(),
                     gui_font,
                     1.0,
                     self.pos,
