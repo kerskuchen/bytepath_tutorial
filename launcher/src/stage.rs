@@ -248,80 +248,6 @@ struct ExplodeParticle {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Custom
-
-#[derive(Debug, Clone)]
-struct InfoText {
-    pub pos: Vec2,
-    pub timer: TimerSimple,
-    pub blinker: Blinker,
-    pub char_switcher: TriggerRepeating,
-    pub color: Color,
-    pub text: String,
-}
-impl InfoText {
-    fn new(pos: Vec2, text: &str, color: Color) -> InfoText {
-        InfoText {
-            pos,
-            timer: TimerSimple::new_started(1.1),
-            blinker: Blinker::new(true, 0.7, 0.05),
-            char_switcher: TriggerRepeating::new_with_distinct_triggertimes(0.7, 0.035),
-            color,
-            text: text.into(),
-        }
-    }
-
-    fn update_and_check_if_finished(
-        &mut self,
-        draw: &mut Drawstate,
-        random: &mut Random,
-        gui_font: &SpriteFont,
-        deltatime: f32,
-    ) -> bool {
-        self.timer.update(deltatime);
-
-        let mut text_offset = Vec2::zero();
-
-        // Change characters in text randomly
-        if self.char_switcher.update_and_check(deltatime) {
-            let random_ascii_chars = "0123456789!@#$%\"&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ";
-
-            // NOTE: Because the text contains only ascii characters it is safe to change characters
-            //       on a byte level
-            assert!(self.text.is_ascii());
-            debug_assert!(random_ascii_chars.is_ascii());
-            unsafe {
-                for ascii_char in self.text.as_bytes_mut().iter_mut().skip(1) {
-                    if random.gen_bool(1.0 / 20.0) {
-                        *ascii_char = random.pick_from_slice(random_ascii_chars.as_bytes());
-                    }
-                }
-            }
-        }
-
-        // Draw text
-        let visible = self.blinker.update_and_check(deltatime);
-        if visible {
-            for character in self.text.chars() {
-                text_offset = draw.draw_text(
-                    &character.to_string(),
-                    gui_font,
-                    1.0,
-                    self.pos,
-                    text_offset,
-                    false,
-                    DEPTH_INFOTEXT,
-                    self.color,
-                    ADDITIVITY_NONE,
-                )
-            }
-        }
-
-        self.timer.is_finished()
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 // Drawables
 
 #[derive(Debug, Clone)]
@@ -527,6 +453,125 @@ where
             .iter()
             .map(|&point| Vec2::from(point.into()).transformed(pivot, pos, scale, dir))
             .collect()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Custom Entities that are to awkward to be combined from components
+
+#[derive(Debug, Clone)]
+struct InfoText {
+    pub pos: Vec2,
+    pub timer: TimerSimple,
+    pub blinker: Blinker,
+    pub char_switcher: TriggerRepeating,
+    pub color: Color,
+    pub text: Vec<u8>,
+    pub text_color_foreground: Vec<Color>,
+    pub text_color_background: Vec<Color>,
+}
+impl InfoText {
+    fn new(pos: Vec2, text: &str, color: Color) -> InfoText {
+        assert!(text.is_ascii());
+        let text: Vec<u8> = text.as_bytes().into();
+        let text_color_foreground = vec![color; text.len()];
+        let text_color_background = vec![Color::transparent(); text.len()];
+
+        InfoText {
+            pos,
+            timer: TimerSimple::new_started(1.1),
+            blinker: Blinker::new(true, 0.7, 0.05),
+            char_switcher: TriggerRepeating::new_with_distinct_triggertimes(0.7, 0.035),
+            color,
+            text,
+            text_color_foreground,
+            text_color_background,
+        }
+    }
+
+    fn update_and_check_if_finished(
+        &mut self,
+        draw: &mut Drawstate,
+        random: &mut Random,
+        gui_font: &SpriteFont,
+        deltatime: f32,
+    ) -> bool {
+        self.timer.update(deltatime);
+
+        let mut text_offset = Vec2::zero();
+
+        // Change text characters and colors randomly
+        if self.char_switcher.update_and_check(deltatime) {
+            // Change characters
+            let random_ascii_chars = "0123456789!@#$%\"&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ";
+            debug_assert!(random_ascii_chars.is_ascii());
+            for ascii_char in self.text.iter_mut().skip(1) {
+                if random.gen_bool(1.0 / 20.0) {
+                    *ascii_char = random.pick_from_slice(random_ascii_chars.as_bytes());
+                }
+            }
+
+            // Change colors
+            let colors = {
+                let mut colors_default = vec![
+                    COLOR_DEFAULT,
+                    COLOR_HP,
+                    COLOR_AMMO,
+                    COLOR_BOOST,
+                    COLOR_SKILL_POINT,
+                ];
+                let mut colors_negative: Vec<Color> = colors_default
+                    .iter()
+                    .map(|&color| {
+                        let mut result = color;
+                        result.r = 1.0 - result.r;
+                        result.g = 1.0 - result.g;
+                        result.b = 1.0 - result.b;
+                        result
+                    })
+                    .collect();
+
+                let mut result = Vec::new();
+                result.append(&mut colors_default);
+                result.append(&mut colors_negative);
+                result
+            };
+            for color in self.text_color_foreground.iter_mut() {
+                if random.gen_bool(1.0 / 5.0) {
+                    *color = random.pick_from_slice(&colors)
+                } else {
+                    *color = self.color;
+                }
+            }
+            for color in self.text_color_background.iter_mut() {
+                if random.gen_bool(1.0 / 10.0) {
+                    *color = random.pick_from_slice(&colors)
+                } else {
+                    *color = Color::transparent();
+                }
+            }
+        }
+
+        // Draw text
+        let visible = self.blinker.update_and_check(deltatime);
+        if visible {
+            for (index, &character) in self.text.iter().enumerate() {
+                text_offset = draw.draw_text(
+                    &(character as char).to_string(),
+                    gui_font,
+                    1.0,
+                    self.pos,
+                    text_offset,
+                    false,
+                    Some(self.text_color_background[index]),
+                    DEPTH_INFOTEXT,
+                    self.text_color_foreground[index],
+                    ADDITIVITY_NONE,
+                )
+            }
+        }
+
+        self.timer.is_finished()
     }
 }
 
@@ -811,7 +856,7 @@ impl Archetypes {
             Boost {
                 size,
                 color: COLOR_BOOST,
-                boost_amount: 50.0,
+                boost_amount: 25.0,
             },
             Collider {
                 radius: size,
