@@ -1771,8 +1771,9 @@ impl Scene for SceneStage {
                         TweenScale::new(boost.size, 2.5 * boost.size, 0.35, EasingType::CubicInOut),
                     );
 
+                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
                     self.commands
-                        .add_entity((InfoText::new(xform.pos, "+BOOST", COLOR_BOOST),));
+                        .add_entity((InfoText::new(text_pos, "+BOOST", COLOR_BOOST),));
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
