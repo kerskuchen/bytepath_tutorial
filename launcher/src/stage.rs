@@ -12,10 +12,11 @@ const DEBUG_DRAW_ENABLE: bool = false;
 
 const DEPTH_BACKGROUND: Depth = 0.0;
 const DEPTH_PLAYER: Depth = 10.0;
+const DEPTH_COLLECTIBLES: Depth = 15.0;
 const DEPTH_PROJECTILE: Depth = 20.0;
 const DEPTH_EFFECTS: Depth = 30.0;
+const DEPTH_INFOTEXT: Depth = 35.0;
 const DEPTH_SCREENFLASH: Depth = 60.0;
-const DEPTH_COLLECTIBLES: Depth = 15.0;
 
 // TODO: When f32 gets const functions we can just use from_rgb_bytes instead of this monstrosity
 const COLOR_DEFAULT: Color = Color::from_rgb(222.0 / 255.0, 222.0 / 255.0, 222.0 / 255.0);
@@ -31,6 +32,8 @@ const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Shared Components
+
+type Blinker = TimerStateSwitchBinary;
 
 #[derive(Debug, Clone)]
 struct Collider {
@@ -167,28 +170,6 @@ impl AutoremoveTimerFrames {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-struct Blinker {
-    pub repeat_timer: TriggerRepeating,
-    pub visible: bool,
-}
-impl Blinker {
-    fn new(start_visibility: bool, start_time: f32, phase_duration: f32) -> Blinker {
-        Blinker {
-            repeat_timer: TriggerRepeating::new_with_distinct_triggertimes(
-                start_time,
-                phase_duration,
-            ),
-            visible: start_visibility,
-        }
-    }
-    fn update(&mut self, deltatime: f32) {
-        if self.repeat_timer.update(deltatime) {
-            self.visible = !self.visible;
-        }
-    }
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Primary Components
 
@@ -267,6 +248,80 @@ struct ExplodeParticle {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Custom
+
+#[derive(Debug, Clone)]
+struct InfoText {
+    pub pos: Vec2,
+    pub timer: TimerSimple,
+    pub blinker: Blinker,
+    pub char_switcher: TriggerRepeating,
+    pub color: Color,
+    pub text: String,
+}
+impl InfoText {
+    fn new(pos: Vec2, text: &str, color: Color) -> InfoText {
+        InfoText {
+            pos,
+            timer: TimerSimple::new_started(1.1),
+            blinker: Blinker::new(true, 0.7, 0.05),
+            char_switcher: TriggerRepeating::new_with_distinct_triggertimes(0.7, 0.035),
+            color,
+            text: text.into(),
+        }
+    }
+
+    fn update_and_check_if_finished(
+        &mut self,
+        draw: &mut Drawstate,
+        random: &mut Random,
+        gui_font: &SpriteFont,
+        deltatime: f32,
+    ) -> bool {
+        self.timer.update(deltatime);
+
+        let mut text_offset = Vec2::zero();
+
+        // Change characters in text randomly
+        if self.char_switcher.update_and_check(deltatime) {
+            let random_ascii_chars = "0123456789!@#$%\"&*()-=+[]^~/;?><.,|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWYXZ";
+
+            // NOTE: Because the text contains only ascii characters it is safe to change characters
+            //       on a byte level
+            assert!(self.text.is_ascii());
+            debug_assert!(random_ascii_chars.is_ascii());
+            unsafe {
+                for ascii_char in self.text.as_bytes_mut().iter_mut().skip(1) {
+                    if random.gen_bool(1.0 / 20.0) {
+                        *ascii_char = random.pick_from_slice(random_ascii_chars.as_bytes());
+                    }
+                }
+            }
+        }
+
+        // Draw text
+        let visible = self.blinker.update_and_check(deltatime);
+        if visible {
+            for character in self.text.chars() {
+                text_offset = draw.draw_text(
+                    &character.to_string(),
+                    gui_font,
+                    1.0,
+                    self.pos,
+                    text_offset,
+                    false,
+                    DEPTH_INFOTEXT,
+                    self.color,
+                    ADDITIVITY_NONE,
+                )
+            }
+        }
+
+        self.timer.is_finished()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Drawables
 
 #[derive(Debug, Clone)]
@@ -308,7 +363,7 @@ struct Drawable {
 }
 
 #[derive(Debug, Clone)]
-struct MultiDrawable {
+struct DrawableMulti {
     drawables: Vec<Drawable>,
 }
 
@@ -743,7 +798,7 @@ impl Archetypes {
         vel: Vec2,
         dir_angle: f32,
         dir_angle_vel: f32,
-    ) -> (Transform, Motion, Boost, Collider, MultiDrawable) {
+    ) -> (Transform, Motion, Boost, Collider, DrawableMulti) {
         let size = 12.0;
         (
             Transform { pos, dir_angle },
@@ -764,7 +819,7 @@ impl Archetypes {
                 layers_affects: 0,
                 collisions: Vec::with_capacity(32),
             },
-            MultiDrawable {
+            DrawableMulti {
                 drawables: vec![
                     Drawable {
                         mesh: MeshType::RectangleTransformed {
@@ -1062,6 +1117,7 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
 // Stage Scene
 
 pub struct SceneStage {
+    gui_font: SpriteFont,
     world: World,
     commands: WorldCommandBuffer,
     player: Option<Entity>,
@@ -1075,7 +1131,7 @@ impl Clone for SceneStage {
 
 impl SceneStage {
     pub fn new(
-        _draw: &mut Drawstate,
+        draw: &mut Drawstate,
         _audio: &mut Audiostate,
         _assets: &mut GameAssets,
         _input: &GameInput,
@@ -1087,6 +1143,7 @@ impl SceneStage {
         let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
 
         SceneStage {
+            gui_font: draw.get_font("default_tiny"),
             world,
             player: Some(player),
             commands: WorldCommandBuffer::new(),
@@ -1377,7 +1434,10 @@ impl Scene for SceneStage {
             let player_scale = Vec2::filled(player.width) / 4.0;
 
             // SHOOTING
-            if player.attack_timer.update(player.attack_speed * deltatime) {
+            if player
+                .attack_timer
+                .update_and_check(player.attack_speed * deltatime)
+            {
                 let shoot_points_relative: Vec<Vec2> = linestrip_transform(
                     &get_shoot_points_for_ship(player.ship_type),
                     Vec2::zero(),
@@ -1408,7 +1468,7 @@ impl Scene for SceneStage {
             }
 
             // EXHAUST PARTICLES
-            if player.timer_trail_particles.update(deltatime) {
+            if player.timer_trail_particles.update_and_check(deltatime) {
                 let exhaust_points: Vec<Vec2> = linestrip_transform(
                     &get_exhaust_points_for_ship(player.ship_type),
                     player_pos,
@@ -1433,7 +1493,7 @@ impl Scene for SceneStage {
             }
 
             // TICK EFFECT
-            if player.timer_tick.update(deltatime) {
+            if player.timer_tick.update_and_check(deltatime) {
                 self.commands
                     .add_entity(Archetypes::new_tick_effect(player_entity));
             }
@@ -1648,6 +1708,9 @@ impl Scene for SceneStage {
                         entity,
                         TweenScale::new(boost.size, 2.5 * boost.size, 0.35, EasingType::CubicInOut),
                     );
+
+                    self.commands
+                        .add_entity((InfoText::new(xform.pos, "+BOOST", COLOR_BOOST),));
                 } else {
                     // Create explode effect
                     self.commands.add_entity(Archetypes::new_hit_effect(
@@ -1697,15 +1760,28 @@ impl Scene for SceneStage {
         for (_entity, (blinker, drawable)) in
             &mut self.world.query::<(&mut Blinker, &mut Drawable)>()
         {
-            blinker.update(deltatime);
-            drawable.visible = blinker.visible;
+            drawable.visible = blinker.update_and_check(deltatime);
+        }
+
+        //------------------------------------------------------------------------------------------
+        // INFOTEXT
+
+        for (entity, infotext) in &mut self.world.query::<&mut InfoText>() {
+            if infotext.update_and_check_if_finished(
+                draw,
+                &mut globals.random,
+                &self.gui_font,
+                deltatime,
+            ) {
+                self.commands.remove_entity(entity);
+            }
         }
 
         //------------------------------------------------------------------------------------------
         // DRAWING
 
         for (_entity, (xform, multi_drawable)) in
-            &mut self.world.query::<(&Transform, &MultiDrawable)>()
+            &mut self.world.query::<(&Transform, &DrawableMulti)>()
         {
             for drawable in &multi_drawable.drawables {
                 draw_drawable(draw, globals, xform, drawable);
