@@ -5,9 +5,11 @@ use ct_lib::math::*;
 use ct_lib::random::*;
 
 use ct_lib::dformat;
+use lazy_static::*;
 
 use hecs::*;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 const DEBUG_DRAW_ENABLE: bool = false;
@@ -60,13 +62,12 @@ const COLORS_NEGATIVE: [Color; 5] = [
     COLOR_NEGATIVE_SKILL_POINT,
 ];
 
-const COLORS_ALL: [Color; 10] = [
+const COLORS_ALL: [Color; 9] = [
     COLOR_DEFAULT,
     COLOR_HP,
     COLOR_AMMO,
     COLOR_BOOST,
     COLOR_SKILL_POINT,
-    COLOR_NEGATIVE_DEFAULT,
     COLOR_NEGATIVE_HP,
     COLOR_NEGATIVE_AMMO,
     COLOR_NEGATIVE_BOOST,
@@ -77,11 +78,15 @@ type CollisionMask = u64;
 const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 enum AttackType {
     Neutral,
     Double,
     Triple,
+    Rapid,
+    Spread,
+    Back,
+    Side,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -94,30 +99,90 @@ struct Attack {
     pub color: Color,
 }
 
-const ATTACK_NEUTRAL: Attack = Attack {
-    typename: AttackType::Neutral,
-    name: "Neutral",
-    name_abbreviation: "N",
-    reload_time: 0.24,
-    ammo_consumption_on_shot: 0.0,
-    color: COLOR_DEFAULT,
-};
-const ATTACK_DOUBLE: Attack = Attack {
-    typename: AttackType::Double,
-    name: "Double",
-    name_abbreviation: "2",
-    reload_time: 0.32,
-    ammo_consumption_on_shot: 2.0,
-    color: COLOR_AMMO,
-};
-const ATTACK_TRIPLE: Attack = Attack {
-    typename: AttackType::Triple,
-    name: "Triple",
-    name_abbreviation: "3",
-    reload_time: 0.32,
-    ammo_consumption_on_shot: 3.0,
-    color: COLOR_BOOST,
-};
+lazy_static! {
+    static ref ATTACKS: HashMap<AttackType, Attack> = {
+        let mut attacks = HashMap::new();
+        attacks.insert(
+            AttackType::Neutral,
+            Attack {
+                typename: AttackType::Neutral,
+                name: "Neutral",
+                name_abbreviation: "N",
+                reload_time: 0.24,
+                ammo_consumption_on_shot: 0.0,
+                color: COLOR_DEFAULT,
+            },
+        );
+        attacks.insert(
+            AttackType::Double,
+            Attack {
+                typename: AttackType::Double,
+                name: "Double",
+                name_abbreviation: "2",
+                reload_time: 0.32,
+                ammo_consumption_on_shot: 2.0,
+                color: COLOR_AMMO,
+            },
+        );
+        attacks.insert(
+            AttackType::Triple,
+            Attack {
+                typename: AttackType::Triple,
+                name: "Triple",
+                name_abbreviation: "3",
+                reload_time: 0.32,
+                ammo_consumption_on_shot: 3.0,
+                color: COLOR_BOOST,
+            },
+        );
+        attacks.insert(
+            AttackType::Rapid,
+            Attack {
+                typename: AttackType::Rapid,
+                name: "Rapid",
+                name_abbreviation: "R",
+                reload_time: 0.12,
+                ammo_consumption_on_shot: 1.0,
+                color: COLOR_DEFAULT,
+            },
+        );
+        attacks.insert(
+            AttackType::Spread,
+            Attack {
+                typename: AttackType::Spread,
+                name: "Spread",
+                name_abbreviation: "RS",
+                reload_time: 0.16,
+                ammo_consumption_on_shot: 1.0,
+                color: COLOR_DEFAULT,
+            },
+        );
+        attacks.insert(
+            AttackType::Back,
+            Attack {
+                typename: AttackType::Back,
+                name: "Back",
+                name_abbreviation: "Ba",
+                reload_time: 0.32,
+                ammo_consumption_on_shot: 2.0,
+                color: COLOR_SKILL_POINT,
+            },
+        );
+        attacks.insert(
+            AttackType::Side,
+            Attack {
+                typename: AttackType::Side,
+                name: "Side",
+                name_abbreviation: "Si",
+                reload_time: 0.32,
+                ammo_consumption_on_shot: 3.0,
+                color: COLOR_BOOST,
+            },
+        );
+
+        attacks
+    };
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Shared Components
@@ -672,7 +737,7 @@ impl Archetypes {
         ship_type: ShipType,
     ) -> (Transform, Motion, Drawable, Player, Collider) {
         let player_size = 12.0;
-        let attack = ATTACK_TRIPLE;
+        let attack = ATTACKS[&AttackType::Side];
         (
             Transform {
                 pos,
@@ -1487,7 +1552,7 @@ impl SceneStage {
         let mut world = World::new();
 
         let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
-        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
+        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Rogue));
 
         SceneStage {
             skillpoint_count: 0,
@@ -1865,12 +1930,12 @@ impl Scene for SceneStage {
                     player_dir,
                     None,
                 );
-                let muzzle_pos = shoot_points.first().cloned().unwrap();
+                let muzzle_pos_absolute = shoot_points.first().cloned().unwrap();
 
                 match player.attack.typename {
-                    AttackType::Neutral => {
+                    AttackType::Neutral | AttackType::Rapid => {
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir,
                             4.0,
                             player.attack.color,
@@ -1878,13 +1943,13 @@ impl Scene for SceneStage {
                     }
                     AttackType::Double => {
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(15.0)),
                             4.0,
                             player.attack.color,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
                             4.0,
                             player.attack.color,
@@ -1892,20 +1957,70 @@ impl Scene for SceneStage {
                     }
                     AttackType::Triple => {
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir,
                             4.0,
                             player.attack.color,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(15.0)),
                             4.0,
                             player.attack.color,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
-                            muzzle_pos,
+                            muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                    }
+                    AttackType::Spread => {
+                        let dir_angle_offset = globals.random.f32_in_range_closed(-20.0, 20.0);
+                        let color = globals.random.pick_from_slice(&COLORS_ALL);
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute,
+                            player_dir.rotated(deg_to_rad(dir_angle_offset)),
+                            4.0,
+                            color,
+                        ));
+                    }
+                    AttackType::Back => {
+                        let muzzle_pos_absolute_back =
+                            player_pos + (player_pos - muzzle_pos_absolute);
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute,
+                            player_dir,
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute_back,
+                            -player_dir,
+                            4.0,
+                            player.attack.color,
+                        ));
+                    }
+                    AttackType::Side => {
+                        let muzzle_pos_absolute_left = player_pos
+                            + (muzzle_pos_absolute - player_pos).rotated(deg_to_rad(90.0));
+                        let muzzle_pos_absolute_right = player_pos
+                            + (muzzle_pos_absolute - player_pos).rotated(deg_to_rad(-90.0));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute,
+                            player_dir,
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute_left,
+                            player_dir.rotated(deg_to_rad(90.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos_absolute_right,
+                            player_dir.rotated(deg_to_rad(-90.0)),
                             4.0,
                             player.attack.color,
                         ));
@@ -1914,8 +2029,8 @@ impl Scene for SceneStage {
 
                 if player.ammo <= 0.0 {
                     player.ammo = player.ammo_max;
-                    player.attack = ATTACK_NEUTRAL;
-                    player.reload_timer = TriggerRepeating::new(ATTACK_NEUTRAL.reload_time);
+                    player.attack = ATTACKS[&AttackType::Neutral];
+                    player.reload_timer = TriggerRepeating::new(player.attack.reload_time);
                 }
             }
 
@@ -2029,7 +2144,7 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
 
-        for (entity, (xform, projectile)) in
+        for (entity, (xform, _projectile)) in
             &mut self.world.query::<(&Transform, &mut Projectile)>()
         {
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);

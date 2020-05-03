@@ -468,6 +468,7 @@ dependencies = [
  "ct_lib",
  "ct_platform",
  "hecs",
+ "lazy_static",
 ]
 
 [[package]]
