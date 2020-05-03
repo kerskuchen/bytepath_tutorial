@@ -361,31 +361,18 @@ struct Player {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct Skillpoints {
-    pub size: f32,
-    pub color: Color,
-    pub skillpoint_amount: usize,
+enum CollectibleType {
+    Boost(f32),
+    Ammo(f32),
+    Hp(f32),
+    Skillpoints(usize),
+    Attack(AttackType),
 }
-
 #[derive(Debug, Copy, Clone)]
-struct Ammo {
-    pub size: f32,
-    pub color: Color,
-    pub ammo_amount: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Boost {
-    pub size: f32,
-    pub color: Color,
-    pub boost_amount: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct Health {
-    pub size: f32,
-    pub color: Color,
-    pub health_amount: f32,
+struct Collectible {
+    collectible: CollectibleType,
+    color: Color,
+    size: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -971,7 +958,7 @@ impl Archetypes {
     ) -> (
         Transform,
         Motion,
-        Ammo,
+        Collectible,
         MoveTowardsTarget,
         Collider,
         Drawable,
@@ -985,10 +972,10 @@ impl Archetypes {
                 dir_angle_vel,
                 dir_angle_acc: 0.0,
             },
-            Ammo {
-                size,
+            Collectible {
+                collectible: CollectibleType::Ammo(5.0),
                 color: COLOR_AMMO,
-                ammo_amount: 5.0,
+                size,
             },
             MoveTowardsTarget {
                 target: player_entity,
@@ -1024,7 +1011,7 @@ impl Archetypes {
         vel: Vec2,
         dir_angle: f32,
         dir_angle_vel: f32,
-    ) -> (Transform, Motion, Skillpoints, Collider, DrawableMulti) {
+    ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
         let size = 12.0;
         (
             Transform { pos, dir_angle },
@@ -1034,10 +1021,10 @@ impl Archetypes {
                 dir_angle_vel,
                 dir_angle_acc: 0.0,
             },
-            Skillpoints {
-                size,
+            Collectible {
+                collectible: CollectibleType::Skillpoints(1),
                 color: COLOR_SKILL_POINT,
-                skillpoint_amount: 1,
+                size,
             },
             Collider {
                 radius: size,
@@ -1089,7 +1076,7 @@ impl Archetypes {
         vel: Vec2,
         dir_angle: f32,
         dir_angle_vel: f32,
-    ) -> (Transform, Motion, Boost, Collider, DrawableMulti) {
+    ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
         let size = 12.0;
         (
             Transform { pos, dir_angle },
@@ -1099,10 +1086,10 @@ impl Archetypes {
                 dir_angle_vel,
                 dir_angle_acc: 0.0,
             },
-            Boost {
-                size,
+            Collectible {
+                collectible: CollectibleType::Boost(25.0),
                 color: COLOR_BOOST,
-                boost_amount: 25.0,
+                size,
             },
             Collider {
                 radius: size,
@@ -1149,7 +1136,10 @@ impl Archetypes {
         )
     }
 
-    fn new_health(pos: Vec2, vel: Vec2) -> (Transform, Motion, Health, Collider, DrawableMulti) {
+    fn new_health(
+        pos: Vec2,
+        vel: Vec2,
+    ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
         let size = 10.0;
         (
             Transform {
@@ -1162,10 +1152,10 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Health {
-                size,
+            Collectible {
+                collectible: CollectibleType::Hp(25.0),
                 color: COLOR_HP,
-                health_amount: 25.0,
+                size,
             },
             Collider {
                 radius: size,
@@ -1825,35 +1815,30 @@ impl Scene for SceneStage {
             draw.debug_log_color(COLOR_BOOST, dformat!(player.boost));
 
             for &collision_entity in &collider.collisions {
-                if let Some(ammo_component) = self.world.get::<Ammo>(collision_entity).ok() {
-                    player.ammo = clampf(
-                        player.ammo + ammo_component.ammo_amount,
-                        0.0,
-                        player.ammo_max,
-                    );
-                }
-                if let Some(boost_component) = self.world.get::<Boost>(collision_entity).ok() {
-                    player.boost = clampf(
-                        player.boost + boost_component.boost_amount,
-                        0.0,
-                        player.boost_max,
-                    );
-                    if player.boost > player.boost_max / 2.0 {
-                        player.boost_allowed = true;
-                        player.boost_cooldown_timer.stop();
+                if let Some(collectible) = self.world.get::<Collectible>(collision_entity).ok() {
+                    match collectible.collectible {
+                        CollectibleType::Boost(amount) => {
+                            player.boost = clampf(player.boost + amount, 0.0, player.boost_max);
+                            if player.boost > player.boost_max / 2.0 {
+                                player.boost_allowed = true;
+                                player.boost_cooldown_timer.stop();
+                            }
+                        }
+                        CollectibleType::Ammo(amount) => {
+                            player.ammo = clampf(player.ammo + amount, 0.0, player.ammo_max);
+                        }
+                        CollectibleType::Hp(amount) => {
+                            player.hp = clampf(player.hp + amount, 0.0, player.hp_max);
+                        }
+                        CollectibleType::Skillpoints(amount) => {
+                            self.skillpoint_count += amount;
+                        }
+                        CollectibleType::Attack(attacktype) => {
+                            player.ammo = player.ammo_max;
+                            player.attack = ATTACKS[&attacktype];
+                            player.reload_timer = TriggerRepeating::new(player.attack.reload_time);
+                        }
                     }
-                }
-                if let Some(health_component) = self.world.get::<Health>(collision_entity).ok() {
-                    player.hp = clampf(
-                        player.hp + health_component.health_amount,
-                        0.0,
-                        player.hp_max,
-                    );
-                }
-                if let Some(skillpoint_component) =
-                    self.world.get::<Skillpoints>(collision_entity).ok()
-                {
-                    self.skillpoint_count += skillpoint_component.skillpoint_amount;
                 }
             }
 
@@ -2166,384 +2151,340 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // UPDATE AMMO
+        // UPDATE COLLECTIBLES
 
         let mut infotext_create_buffer: Vec<InfoText> = Vec::new();
 
-        for (entity, (xform, ammo, move_to_target, collider)) in
+        for (entity, (xform, motion, collectible, collider)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Ammo, &MoveTowardsTarget, &Collider)>()
+                .query::<(&Transform, &Motion, &mut Collectible, &Collider)>()
         {
-            // Check if entity needs to be removed from game
-            let mut remove_self = false;
-            let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
-            if !canvas_rect.contains_point(xform.pos) {
-                remove_self = true;
-            }
-            if collider.collisions.contains(&move_to_target.target) {
-                remove_self = true;
-            }
-
-            if remove_self {
-                self.commands.remove_entity(entity);
-                self.commands.add_entity(Archetypes::new_hit_effect(
-                    xform.pos,
-                    ammo.size,
-                    ammo.size,
-                    45.0,
-                    COLOR_DEFAULT,
-                    0.1,
-                    ammo.color,
-                    0.15,
-                    true,
-                ));
-
-                for _ in 0..globals.random.gen_range(4, 8) {
-                    self.commands.add_entity(Archetypes::new_explode_particle(
-                        xform.pos,
-                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                        globals.random.f32_in_range_closed(50.0, 100.0),
-                        globals.random.f32_in_range_closed(1.0, 2.0),
-                        globals.random.f32_in_range_closed(3.0, 8.0),
-                        globals.random.f32_in_range_closed(0.3, 0.5),
-                        ammo.color,
-                    ));
-                }
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
-        // UPDATE BOOST
-
-        for (entity, (xform, motion, boost, collider)) in
-            &mut self
-                .world
-                .query::<(&Transform, &Motion, &mut Boost, &Collider)>()
-        {
-            // Check if entity needs to be removed from game
             let mut remove_self = false;
             let mut collected = false;
-            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
-                remove_self = true;
-            }
-            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
-                remove_self = true;
-            }
+
+            // Check if entity needs to be removed from game
             if !collider.collisions.is_empty() {
                 remove_self = true;
                 collected = true;
             }
-
-            if remove_self {
-                self.commands.remove_entity(entity);
-
-                // Particles
-                for _ in 0..globals.random.gen_range(4, 8) {
-                    self.commands.add_entity(Archetypes::new_explode_particle(
-                        xform.pos,
-                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                        globals.random.f32_in_range_closed(50.0, 100.0),
-                        globals.random.f32_in_range_closed(1.0, 2.0),
-                        globals.random.f32_in_range_closed(3.0, 8.0),
-                        globals.random.f32_in_range_closed(0.3, 0.5),
-                        boost.color,
-                    ));
+            match collectible.collectible {
+                CollectibleType::Ammo(_) => {
+                    // Follower collectibles
+                    let canvas_rect =
+                        Rect::from_width_height(globals.canvas_width, globals.canvas_height);
+                    if !canvas_rect.contains_point(xform.pos) {
+                        remove_self = true;
+                    }
                 }
-
-                if collected {
-                    // Create collect effect
-
-                    // Inner
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
-                            xform.pos,
-                            boost.size,
-                            boost.size,
-                            45.0,
-                            COLOR_DEFAULT,
-                            0.2,
-                            boost.color,
-                            0.35,
-                            true,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
-
-                    // Outer
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
-                            xform.pos,
-                            1.0,
-                            1.0,
-                            45.0,
-                            COLOR_DEFAULT,
-                            0.2,
-                            boost.color,
-                            0.35,
-                            false,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
-                    self.commands.add_component(
-                        entity,
-                        TweenScale::new(boost.size, 2.5 * boost.size, 0.35, EasingType::CubicInOut),
-                    );
-
-                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                    infotext_create_buffer.push(InfoText::new(text_pos, "+BOOST", boost.color));
-                } else {
-                    // Create explode effect
-                    self.commands.add_entity(Archetypes::new_hit_effect(
-                        xform.pos,
-                        boost.size,
-                        boost.size,
-                        45.0,
-                        COLOR_DEFAULT,
-                        0.1,
-                        boost.color,
-                        0.15,
-                        true,
-                    ));
+                _ => {
+                    // Horizontal moving collectibles
+                    if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
+                        remove_self = true;
+                    }
+                    if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
+                        remove_self = true;
+                    }
                 }
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
-        // UPDATE SKILLPOINTS
-
-        for (entity, (xform, motion, skillpoints, collider)) in
-            &mut self
-                .world
-                .query::<(&Transform, &Motion, &mut Skillpoints, &Collider)>()
-        {
-            // Check if entity needs to be removed from game
-            let mut remove_self = false;
-            let mut collected = false;
-            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
-                remove_self = true;
-            }
-            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
-                remove_self = true;
-            }
-            if !collider.collisions.is_empty() {
-                remove_self = true;
-                collected = true;
             }
 
             if remove_self {
                 self.commands.remove_entity(entity);
 
-                // Particles
-                for _ in 0..globals.random.gen_range(4, 8) {
-                    self.commands.add_entity(Archetypes::new_explode_particle(
-                        xform.pos,
-                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                        globals.random.f32_in_range_closed(50.0, 100.0),
-                        globals.random.f32_in_range_closed(1.0, 2.0),
-                        globals.random.f32_in_range_closed(3.0, 8.0),
-                        globals.random.f32_in_range_closed(0.3, 0.5),
-                        skillpoints.color,
-                    ));
-                }
+                match collectible.collectible {
+                    CollectibleType::Boost(_) => {
+                        // Particles
+                        for _ in 0..globals.random.gen_range(4, 8) {
+                            self.commands.add_entity(Archetypes::new_explode_particle(
+                                xform.pos,
+                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                                globals.random.f32_in_range_closed(50.0, 100.0),
+                                globals.random.f32_in_range_closed(1.0, 2.0),
+                                globals.random.f32_in_range_closed(3.0, 8.0),
+                                globals.random.f32_in_range_closed(0.3, 0.5),
+                                collectible.color,
+                            ));
+                        }
 
-                if collected {
-                    // Create collect effect
+                        if collected {
+                            // Create collect effect
 
-                    // Inner
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
+                            // Inner
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    collectible.size,
+                                    collectible.size,
+                                    45.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    true,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+
+                            // Outer
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.0,
+                                    1.0,
+                                    45.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    false,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            self.commands.add_component(
+                                entity,
+                                TweenScale::new(
+                                    collectible.size,
+                                    2.5 * collectible.size,
+                                    0.35,
+                                    EasingType::CubicInOut,
+                                ),
+                            );
+
+                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                            infotext_create_buffer.push(InfoText::new(
+                                text_pos,
+                                "+BOOST",
+                                collectible.color,
+                            ));
+                        } else {
+                            // Create explode effect
+                            self.commands.add_entity(Archetypes::new_hit_effect(
+                                xform.pos,
+                                collectible.size,
+                                collectible.size,
+                                45.0,
+                                COLOR_DEFAULT,
+                                0.1,
+                                collectible.color,
+                                0.15,
+                                true,
+                            ));
+                        }
+                    }
+                    CollectibleType::Ammo(_) => {
+                        self.commands.add_entity(Archetypes::new_hit_effect(
                             xform.pos,
-                            skillpoints.size,
-                            skillpoints.size,
+                            collectible.size,
+                            collectible.size,
                             45.0,
                             COLOR_DEFAULT,
-                            0.2,
-                            skillpoints.color,
-                            0.35,
+                            0.1,
+                            collectible.color,
+                            0.15,
                             true,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                        ));
 
-                    // Outer
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
-                            xform.pos,
-                            1.0,
-                            1.0,
-                            45.0,
-                            COLOR_DEFAULT,
-                            0.2,
-                            skillpoints.color,
-                            0.35,
-                            false,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
-                    self.commands.add_component(
-                        entity,
-                        TweenScale::new(
-                            skillpoints.size,
-                            2.5 * skillpoints.size,
-                            0.35,
-                            EasingType::CubicInOut,
-                        ),
-                    );
+                        for _ in 0..globals.random.gen_range(4, 8) {
+                            self.commands.add_entity(Archetypes::new_explode_particle(
+                                xform.pos,
+                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                                globals.random.f32_in_range_closed(50.0, 100.0),
+                                globals.random.f32_in_range_closed(1.0, 2.0),
+                                globals.random.f32_in_range_closed(3.0, 8.0),
+                                globals.random.f32_in_range_closed(0.3, 0.5),
+                                collectible.color,
+                            ));
+                        }
+                    }
+                    CollectibleType::Hp(_) => {
+                        // Particles
+                        for _ in 0..globals.random.gen_range(4, 8) {
+                            self.commands.add_entity(Archetypes::new_explode_particle(
+                                xform.pos,
+                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                                globals.random.f32_in_range_closed(50.0, 100.0),
+                                globals.random.f32_in_range_closed(1.0, 2.0),
+                                globals.random.f32_in_range_closed(3.0, 8.0),
+                                globals.random.f32_in_range_closed(0.3, 0.5),
+                                collectible.color,
+                            ));
+                        }
+                        if collected {
+                            // Create collect effect
 
-                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                    infotext_create_buffer.push(InfoText::new(
-                        text_pos,
-                        "+1 SP",
-                        skillpoints.color,
-                    ));
-                } else {
-                    // Create explode effect
-                    self.commands.add_entity(Archetypes::new_hit_effect(
-                        xform.pos,
-                        skillpoints.size,
-                        skillpoints.size,
-                        45.0,
-                        COLOR_DEFAULT,
-                        0.1,
-                        skillpoints.color,
-                        0.15,
-                        true,
-                    ));
-                }
-            }
-        }
-        //------------------------------------------------------------------------------------------
-        // UPDATE HEALTH
+                            // Inner vertical
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.2 * collectible.size / 3.0,
+                                    1.2 * collectible.size,
+                                    0.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    true,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
 
-        for (entity, (xform, motion, health, collider)) in
-            &mut self
-                .world
-                .query::<(&Transform, &Motion, &mut Health, &Collider)>()
-        {
-            // Check if entity needs to be removed from game
-            let mut remove_self = false;
-            let mut collected = false;
-            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width {
-                remove_self = true;
-            }
-            if motion.vel.x < 0.0 && xform.pos.x < 0.0 {
-                remove_self = true;
-            }
-            if !collider.collisions.is_empty() {
-                remove_self = true;
-                collected = true;
-            }
+                            // Inner horizontal
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.2 * collectible.size,
+                                    1.2 * collectible.size / 3.0,
+                                    0.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    true,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
 
-            if remove_self {
-                self.commands.remove_entity(entity);
+                            // Outer
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect_round(
+                                    xform.pos,
+                                    1.0,
+                                    collectible.color,
+                                    0.2,
+                                    COLOR_DEFAULT,
+                                    0.35,
+                                    false,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            self.commands.add_component(
+                                entity,
+                                TweenScale::new(
+                                    1.2 * collectible.size,
+                                    1.7 * collectible.size,
+                                    0.35,
+                                    EasingType::CubicInOut,
+                                ),
+                            );
 
-                // Particles
-                for _ in 0..globals.random.gen_range(4, 8) {
-                    self.commands.add_entity(Archetypes::new_explode_particle(
-                        xform.pos,
-                        rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                        globals.random.f32_in_range_closed(50.0, 100.0),
-                        globals.random.f32_in_range_closed(1.0, 2.0),
-                        globals.random.f32_in_range_closed(3.0, 8.0),
-                        globals.random.f32_in_range_closed(0.3, 0.5),
-                        health.color,
-                    ));
-                }
-                if collected {
-                    // Create collect effect
+                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                            infotext_create_buffer.push(InfoText::new(text_pos, "+HP", COLOR_HP));
+                        } else {
+                            // Create explode effect
+                            self.commands.add_entity(Archetypes::new_hit_effect(
+                                xform.pos,
+                                collectible.size,
+                                collectible.size,
+                                45.0,
+                                COLOR_DEFAULT,
+                                0.1,
+                                collectible.color,
+                                0.15,
+                                true,
+                            ));
+                        }
+                    }
+                    CollectibleType::Skillpoints(_) => {
+                        // Particles
+                        for _ in 0..globals.random.gen_range(4, 8) {
+                            self.commands.add_entity(Archetypes::new_explode_particle(
+                                xform.pos,
+                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
+                                globals.random.f32_in_range_closed(50.0, 100.0),
+                                globals.random.f32_in_range_closed(1.0, 2.0),
+                                globals.random.f32_in_range_closed(3.0, 8.0),
+                                globals.random.f32_in_range_closed(0.3, 0.5),
+                                collectible.color,
+                            ));
+                        }
 
-                    // Inner vertical
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
-                            xform.pos,
-                            1.2 * health.size / 3.0,
-                            1.2 * health.size,
-                            0.0,
-                            COLOR_DEFAULT,
-                            0.2,
-                            health.color,
-                            0.35,
-                            true,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                        if collected {
+                            // Create collect effect
 
-                    // Inner horizontal
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect(
-                            xform.pos,
-                            1.2 * health.size,
-                            1.2 * health.size / 3.0,
-                            0.0,
-                            COLOR_DEFAULT,
-                            0.2,
-                            health.color,
-                            0.35,
-                            true,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            // Inner
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    collectible.size,
+                                    collectible.size,
+                                    45.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    true,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
 
-                    // Outer
-                    let entity = self.world.reserve_entity();
-                    self.commands.add_component_bundle(
-                        entity,
-                        Archetypes::new_hit_effect_round(
-                            xform.pos,
-                            1.0,
-                            health.color,
-                            0.2,
-                            COLOR_DEFAULT,
-                            0.35,
-                            false,
-                        ),
-                    );
-                    self.commands
-                        .add_component(entity, Blinker::new(true, 0.2, 0.05));
-                    self.commands.add_component(
-                        entity,
-                        TweenScale::new(
-                            1.2 * health.size,
-                            1.7 * health.size,
-                            0.35,
-                            EasingType::CubicInOut,
-                        ),
-                    );
+                            // Outer
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.0,
+                                    1.0,
+                                    45.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    false,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            self.commands.add_component(
+                                entity,
+                                TweenScale::new(
+                                    collectible.size,
+                                    2.5 * collectible.size,
+                                    0.35,
+                                    EasingType::CubicInOut,
+                                ),
+                            );
 
-                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                    infotext_create_buffer.push(InfoText::new(text_pos, "+HP", COLOR_HP));
-                } else {
-                    // Create explode effect
-                    self.commands.add_entity(Archetypes::new_hit_effect(
-                        xform.pos,
-                        health.size,
-                        health.size,
-                        45.0,
-                        COLOR_DEFAULT,
-                        0.1,
-                        health.color,
-                        0.15,
-                        true,
-                    ));
+                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                            infotext_create_buffer.push(InfoText::new(
+                                text_pos,
+                                "+1 SP",
+                                collectible.color,
+                            ));
+                        } else {
+                            // Create explode effect
+                            self.commands.add_entity(Archetypes::new_hit_effect(
+                                xform.pos,
+                                collectible.size,
+                                collectible.size,
+                                45.0,
+                                COLOR_DEFAULT,
+                                0.1,
+                                collectible.color,
+                                0.15,
+                                true,
+                            ));
+                        }
+                    }
+                    CollectibleType::Attack(_) => {}
                 }
             }
         }
