@@ -8,6 +8,8 @@ use ct_lib::dformat;
 use lazy_static::*;
 
 use hecs::*;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -78,7 +80,7 @@ type CollisionMask = u64;
 const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
 enum AttackType {
     Neutral,
     Double,
@@ -961,7 +963,7 @@ impl Archetypes {
         )
     }
 
-    fn new_ammo(
+    fn new_ammo_collectible(
         pos: Vec2,
         vel: Vec2,
         dir_angle: f32,
@@ -1018,7 +1020,7 @@ impl Archetypes {
         )
     }
 
-    fn new_skillpoints(
+    fn new_skillpoints_collectible(
         pos: Vec2,
         vel: Vec2,
         dir_angle: f32,
@@ -1083,7 +1085,7 @@ impl Archetypes {
         )
     }
 
-    fn new_boost(
+    fn new_boost_collectible(
         pos: Vec2,
         vel: Vec2,
         dir_angle: f32,
@@ -1148,7 +1150,77 @@ impl Archetypes {
         )
     }
 
-    fn new_health(
+    fn new_attack_collectible(
+        pos: Vec2,
+        vel: Vec2,
+        attacktype: AttackType,
+    ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
+        assert!(attacktype != AttackType::Neutral);
+
+        let color = ATTACKS[&attacktype].color;
+        let size = 14.0;
+        (
+            Transform {
+                pos,
+                dir_angle: 45.0,
+            },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel: 0.0,
+                dir_angle_acc: 0.0,
+            },
+            Collectible {
+                collectible: CollectibleType::Attack(attacktype),
+                color,
+                size,
+            },
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
+            },
+            DrawableMulti {
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 1.0 * size,
+                            height: 1.0 * size,
+                            filled: false,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        color: COLOR_DEFAULT,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                    Drawable {
+                        mesh: MeshType::RectangleTransformed {
+                            width: 1.3 * size,
+                            height: 1.3 * size,
+                            filled: false,
+                            centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        color,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                ],
+            },
+        )
+    }
+
+    fn new_hp_collectible(
         pos: Vec2,
         vel: Vec2,
     ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
@@ -1736,11 +1808,31 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // SPAWN ATTACK
+
+        if input.keyboard.is_down(Scancode::A) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+            let attacktypes: Vec<AttackType> = AttackType::iter().skip(1).collect();
+            let attacktype = globals.random.pick_from_slice(&attacktypes);
+            self.world
+                .spawn(Archetypes::new_attack_collectible(pos, vel, attacktype));
+        }
+
+        //------------------------------------------------------------------------------------------
         // SPAWN AMMO
 
         if input.keyboard.is_down(Scancode::A) {
             if let Some(player_entity) = self.player {
-                self.world.spawn(Archetypes::new_ammo(
+                self.world.spawn(Archetypes::new_ammo_collectible(
                     globals.random.vec2_in_rect(Rect::from_width_height(
                         globals.canvas_width,
                         globals.canvas_height,
@@ -1768,7 +1860,7 @@ impl Scene for SceneStage {
                     .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
             );
             let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_boost(
+            self.world.spawn(Archetypes::new_boost_collectible(
                 pos,
                 vel,
                 globals.random.f32_in_range_closed(0.0, 360.0),
@@ -1790,7 +1882,7 @@ impl Scene for SceneStage {
                     .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
             );
             let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_skillpoints(
+            self.world.spawn(Archetypes::new_skillpoints_collectible(
                 pos,
                 vel,
                 globals.random.f32_in_range_closed(0.0, 360.0),
@@ -1812,7 +1904,7 @@ impl Scene for SceneStage {
                     .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
             );
             let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_health(pos, vel));
+            self.world.spawn(Archetypes::new_hp_collectible(pos, vel));
         }
 
         //------------------------------------------------------------------------------------------
@@ -2235,14 +2327,13 @@ impl Scene for SceneStage {
                         true,
                     ));
                 } else {
+                    // Create collect effect
                     let text = collectible.collectible.get_infotext_string();
                     let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
                     infotext_create_buffer.push(InfoText::new(text_pos, text, collectible.color));
 
                     match collectible.collectible {
                         CollectibleType::Boost(_) => {
-                            // Create collect effect
-
                             // Inner
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(
@@ -2304,8 +2395,6 @@ impl Scene for SceneStage {
                             ));
                         }
                         CollectibleType::Hp(_) => {
-                            // Create collect effect
-
                             // Inner vertical
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(
@@ -2371,8 +2460,6 @@ impl Scene for SceneStage {
                             );
                         }
                         CollectibleType::Skillpoints(_) => {
-                            // Create collect effect
-
                             // Inner
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(

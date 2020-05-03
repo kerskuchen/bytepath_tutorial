@@ -18,3 +18,5 @@ path = "../cottontail/ct_platform"
 [dependencies]
 hecs = "0.2"
 lazy_static = "1.4"
+strum = "0.18"
+strum_macros = "0.18"
