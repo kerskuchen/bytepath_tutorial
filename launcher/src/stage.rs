@@ -449,9 +449,7 @@ enum MeshType {
         text: String,
         font_name: String,
         font_scale: f32,
-        origin_is_baseline: bool,
-        alignment_x: AlignmentHorizontal,
-        alignment_y: AlignmentVertical,
+        alignment: Option<TextAlignment>,
         color_background: Option<Color>,
     },
 }
@@ -620,24 +618,19 @@ fn draw_drawable(
             text,
             font_name,
             font_scale,
-            origin_is_baseline,
-            alignment_x,
-            alignment_y,
+            alignment,
             color_background,
         } => {
             let font = fonts
                 .get(font_name)
                 .expect(&format!("Font '{}' not found in given fontmap", font_name));
-            draw.draw_pixel(pos, depth, color, additivity);
-            draw.draw_text_aligned(
+            draw.draw_text(
                 text,
                 font,
                 *font_scale,
                 pos,
                 Vec2::zero(),
-                *origin_is_baseline,
-                *alignment_x,
-                *alignment_y,
+                *alignment,
                 *color_background,
                 depth,
                 color,
@@ -752,7 +745,7 @@ impl InfoText {
                     1.0,
                     self.pos,
                     text_offset,
-                    false,
+                    None,
                     Some(self.text_color_background[index]),
                     DEPTH_INFOTEXT,
                     self.text_color_foreground[index],
@@ -1261,9 +1254,12 @@ impl Archetypes {
                             text: label,
                             font_name,
                             font_scale: 1.0,
-                            origin_is_baseline: false,
-                            alignment_x: AlignmentHorizontal::Center,
-                            alignment_y: AlignmentVertical::Center,
+                            alignment: Some(TextAlignment {
+                                x: AlignmentHorizontal::Center,
+                                y: AlignmentVertical::Center,
+                                origin_is_baseline: false,
+                                ignore_whitespace: true,
+                            }),
                             color_background: None,
                         },
                         pos_offset: Vec2::zero(),
@@ -2666,7 +2662,7 @@ impl Scene for SceneStage {
                         let infotext: &InfoText = infotext;
                         let text: String = infotext.text.iter().collect();
                         let rect = gui_font
-                            .get_text_bounding_rect(&text, 1)
+                            .get_text_bounding_rect(&text, 1, false)
                             .translated_by(infotext.pos.pixel_snapped_i32());
                         result.push(rect);
                     }
@@ -2678,7 +2674,7 @@ impl Scene for SceneStage {
                 let text_rect = {
                     let text: String = infotext_to_create.text.iter().collect();
                     gui_font
-                        .get_text_bounding_rect(&text, 1)
+                        .get_text_bounding_rect(&text, 1, false)
                         .translated_by(infotext_to_create.pos.pixel_snapped_i32())
                 };
                 infotext_to_create.pos = text_rect
