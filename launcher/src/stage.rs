@@ -2566,7 +2566,63 @@ impl Scene for SceneStage {
                                 ),
                             );
                         }
-                        CollectibleType::Attack(_) => {}
+                        CollectibleType::Attack(_) => {
+                            // Inner
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.0,
+                                    1.0,
+                                    45.0,
+                                    COLOR_DEFAULT,
+                                    0.2,
+                                    COLOR_DEFAULT,
+                                    0.35,
+                                    false,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            self.commands.add_component(
+                                entity,
+                                TweenScale::new(
+                                    1.1 * collectible.size,
+                                    3.1 * collectible.size,
+                                    0.35,
+                                    EasingType::CubicInOut,
+                                ),
+                            );
+
+                            // Outer
+                            let entity = self.world.reserve_entity();
+                            self.commands.add_component_bundle(
+                                entity,
+                                Archetypes::new_hit_effect(
+                                    xform.pos,
+                                    1.0,
+                                    1.0,
+                                    45.0,
+                                    collectible.color,
+                                    0.2,
+                                    collectible.color,
+                                    0.35,
+                                    false,
+                                ),
+                            );
+                            self.commands
+                                .add_component(entity, Blinker::new(true, 0.2, 0.05));
+                            self.commands.add_component(
+                                entity,
+                                TweenScale::new(
+                                    1.4 * collectible.size,
+                                    3.4 * collectible.size,
+                                    0.35,
+                                    EasingType::CubicInOut,
+                                ),
+                            );
+                        }
                     }
                 }
             }
