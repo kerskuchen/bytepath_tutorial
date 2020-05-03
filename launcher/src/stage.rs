@@ -368,6 +368,18 @@ enum CollectibleType {
     Skillpoints(usize),
     Attack(AttackType),
 }
+impl CollectibleType {
+    fn get_infotext_string(&self) -> &'static str {
+        match self {
+            CollectibleType::Boost(_) => "+BOOST",
+            CollectibleType::Ammo(_) => "+AMMO",
+            CollectibleType::Hp(_) => "+HP",
+            CollectibleType::Skillpoints(_) => "+1 SP",
+            CollectibleType::Attack(attacktype) => ATTACKS[attacktype].name,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 struct Collectible {
     collectible: CollectibleType,
@@ -2163,7 +2175,7 @@ impl Scene for SceneStage {
             let mut remove_self = false;
             let mut collected = false;
 
-            // Check if entity needs to be removed from game
+            // Check if collectible needs to be removed from game
             if !collider.collisions.is_empty() {
                 remove_self = true;
                 collected = true;
@@ -2191,9 +2203,10 @@ impl Scene for SceneStage {
             if remove_self {
                 self.commands.remove_entity(entity);
 
+                // Create particles
                 match collectible.collectible {
-                    CollectibleType::Boost(_) => {
-                        // Particles
+                    CollectibleType::Attack(_) => {}
+                    _ => {
                         for _ in 0..globals.random.gen_range(4, 8) {
                             self.commands.add_entity(Archetypes::new_explode_particle(
                                 xform.pos,
@@ -2205,8 +2218,29 @@ impl Scene for SceneStage {
                                 collectible.color,
                             ));
                         }
+                    }
+                };
 
-                        if collected {
+                if !collected {
+                    // Create explode effect
+                    self.commands.add_entity(Archetypes::new_hit_effect(
+                        xform.pos,
+                        collectible.size,
+                        collectible.size,
+                        45.0,
+                        COLOR_DEFAULT,
+                        0.1,
+                        collectible.color,
+                        0.15,
+                        true,
+                    ));
+                } else {
+                    let text = collectible.collectible.get_infotext_string();
+                    let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
+                    infotext_create_buffer.push(InfoText::new(text_pos, text, collectible.color));
+
+                    match collectible.collectible {
+                        CollectibleType::Boost(_) => {
                             // Create collect effect
 
                             // Inner
@@ -2255,15 +2289,8 @@ impl Scene for SceneStage {
                                     EasingType::CubicInOut,
                                 ),
                             );
-
-                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                            infotext_create_buffer.push(InfoText::new(
-                                text_pos,
-                                "+BOOST",
-                                collectible.color,
-                            ));
-                        } else {
-                            // Create explode effect
+                        }
+                        CollectibleType::Ammo(_) => {
                             self.commands.add_entity(Archetypes::new_hit_effect(
                                 xform.pos,
                                 collectible.size,
@@ -2276,46 +2303,7 @@ impl Scene for SceneStage {
                                 true,
                             ));
                         }
-                    }
-                    CollectibleType::Ammo(_) => {
-                        self.commands.add_entity(Archetypes::new_hit_effect(
-                            xform.pos,
-                            collectible.size,
-                            collectible.size,
-                            45.0,
-                            COLOR_DEFAULT,
-                            0.1,
-                            collectible.color,
-                            0.15,
-                            true,
-                        ));
-
-                        for _ in 0..globals.random.gen_range(4, 8) {
-                            self.commands.add_entity(Archetypes::new_explode_particle(
-                                xform.pos,
-                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                                globals.random.f32_in_range_closed(50.0, 100.0),
-                                globals.random.f32_in_range_closed(1.0, 2.0),
-                                globals.random.f32_in_range_closed(3.0, 8.0),
-                                globals.random.f32_in_range_closed(0.3, 0.5),
-                                collectible.color,
-                            ));
-                        }
-                    }
-                    CollectibleType::Hp(_) => {
-                        // Particles
-                        for _ in 0..globals.random.gen_range(4, 8) {
-                            self.commands.add_entity(Archetypes::new_explode_particle(
-                                xform.pos,
-                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                                globals.random.f32_in_range_closed(50.0, 100.0),
-                                globals.random.f32_in_range_closed(1.0, 2.0),
-                                globals.random.f32_in_range_closed(3.0, 8.0),
-                                globals.random.f32_in_range_closed(0.3, 0.5),
-                                collectible.color,
-                            ));
-                        }
-                        if collected {
+                        CollectibleType::Hp(_) => {
                             // Create collect effect
 
                             // Inner vertical
@@ -2381,39 +2369,8 @@ impl Scene for SceneStage {
                                     EasingType::CubicInOut,
                                 ),
                             );
-
-                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                            infotext_create_buffer.push(InfoText::new(text_pos, "+HP", COLOR_HP));
-                        } else {
-                            // Create explode effect
-                            self.commands.add_entity(Archetypes::new_hit_effect(
-                                xform.pos,
-                                collectible.size,
-                                collectible.size,
-                                45.0,
-                                COLOR_DEFAULT,
-                                0.1,
-                                collectible.color,
-                                0.15,
-                                true,
-                            ));
                         }
-                    }
-                    CollectibleType::Skillpoints(_) => {
-                        // Particles
-                        for _ in 0..globals.random.gen_range(4, 8) {
-                            self.commands.add_entity(Archetypes::new_explode_particle(
-                                xform.pos,
-                                rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
-                                globals.random.f32_in_range_closed(50.0, 100.0),
-                                globals.random.f32_in_range_closed(1.0, 2.0),
-                                globals.random.f32_in_range_closed(3.0, 8.0),
-                                globals.random.f32_in_range_closed(0.3, 0.5),
-                                collectible.color,
-                            ));
-                        }
-
-                        if collected {
+                        CollectibleType::Skillpoints(_) => {
                             // Create collect effect
 
                             // Inner
@@ -2462,29 +2419,9 @@ impl Scene for SceneStage {
                                     EasingType::CubicInOut,
                                 ),
                             );
-
-                            let text_pos = globals.random.vec2_in_disk(xform.pos, collider.radius);
-                            infotext_create_buffer.push(InfoText::new(
-                                text_pos,
-                                "+1 SP",
-                                collectible.color,
-                            ));
-                        } else {
-                            // Create explode effect
-                            self.commands.add_entity(Archetypes::new_hit_effect(
-                                xform.pos,
-                                collectible.size,
-                                collectible.size,
-                                45.0,
-                                COLOR_DEFAULT,
-                                0.1,
-                                collectible.color,
-                                0.15,
-                                true,
-                            ));
                         }
+                        CollectibleType::Attack(_) => {}
                     }
-                    CollectibleType::Attack(_) => {}
                 }
             }
         }
