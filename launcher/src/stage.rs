@@ -294,7 +294,8 @@ struct TickEffect {
 
 #[derive(Debug, Copy, Clone)]
 struct Projectile {
-    pub size: f32,
+    pub length: f32,
+    pub color: Color,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -339,6 +340,7 @@ enum MeshType {
 struct Drawable {
     mesh: MeshType,
     pos_offset: Vec2,
+    dir_angle_offset: f32,
     scale: Vec2,
     depth: Depth,
     color: Color,
@@ -364,7 +366,7 @@ fn draw_drawable(
 
     let pos = xform.pos;
     let scale = drawable.scale;
-    let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
+    let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle + drawable.dir_angle_offset));
     let pivot = drawable.pos_offset;
     let depth = drawable.depth;
     let color = drawable.color;
@@ -476,12 +478,12 @@ fn draw_drawable(
             centered,
         } => {
             let (start, end) = if *centered {
-                (xform.pos, xform.pos + *length * dir)
-            } else {
                 (
                     xform.pos - 0.5 * *length * dir,
                     xform.pos + 0.5 * *length * dir,
                 )
+            } else {
+                (xform.pos, xform.pos + *length * dir)
             };
 
             draw.draw_line_with_thickness(
@@ -640,6 +642,7 @@ impl Archetypes {
             Drawable {
                 mesh: MeshType::Linestrip(get_draw_lines_for_ship(ship_type)),
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::filled(player_size) / 4.0,
                 color: COLOR_DEFAULT,
                 additivity: ADDITIVITY_NONE,
@@ -706,6 +709,7 @@ impl Archetypes {
                     centered: false,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 color: COLOR_DEFAULT,
                 additivity: ADDITIVITY_NONE,
@@ -751,6 +755,7 @@ impl Archetypes {
                     centered: true,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 color: COLOR_DEFAULT,
                 additivity: ADDITIVITY_NONE,
@@ -780,6 +785,7 @@ impl Archetypes {
                     filled: true,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::filled(size),
                 depth: DEPTH_EFFECTS,
                 color,
@@ -790,8 +796,12 @@ impl Archetypes {
         )
     }
 
-    fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, DrawableMulti) {
-        let projectile_size = 2.5;
+    fn new_projectile(
+        pos: Vec2,
+        dir: Vec2,
+        length: f32,
+        color: Color,
+    ) -> (Transform, Motion, Projectile, DrawableMulti) {
         (
             Transform {
                 pos,
@@ -803,23 +813,42 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Projectile {
-                size: projectile_size,
-            },
+            Projectile { length, color },
             DrawableMulti {
-                drawables: vec![Drawable {
-                    mesh: MeshType::Circle {
-                        radius: projectile_size,
-                        filled: false,
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::LineWithThickness {
+                            length,
+                            thickness: 0.4 * length,
+                            smooth_edges: false,
+                            centered: false,
+                        },
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        add_jitter: false,
+                        depth: DEPTH_PROJECTILE,
+                        color,
+                        additivity: ADDITIVITY_NONE,
+                        visible: true,
                     },
-                    pos_offset: Vec2::zero(),
-                    scale: Vec2::ones(),
-                    add_jitter: false,
-                    depth: DEPTH_PROJECTILE,
-                    color: COLOR_DEFAULT,
-                    additivity: ADDITIVITY_NONE,
-                    visible: true,
-                }],
+                    Drawable {
+                        mesh: MeshType::LineWithThickness {
+                            length,
+                            thickness: 0.4 * length,
+                            smooth_edges: false,
+                            centered: false,
+                        },
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: -180.0,
+                        scale: Vec2::ones(),
+                        add_jitter: false,
+                        depth: DEPTH_PROJECTILE,
+                        color: COLOR_DEFAULT,
+                        additivity: ADDITIVITY_NONE,
+                        visible: true,
+                    },
+                ],
             },
         )
     }
@@ -870,6 +899,7 @@ impl Archetypes {
                     centered: true,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 color: COLOR_AMMO,
                 additivity: ADDITIVITY_NONE,
@@ -916,6 +946,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_SKILL_POINT,
                         additivity: ADDITIVITY_NONE,
@@ -931,6 +962,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_SKILL_POINT,
                         additivity: ADDITIVITY_NONE,
@@ -979,6 +1011,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_BOOST,
                         additivity: ADDITIVITY_NONE,
@@ -994,6 +1027,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_BOOST,
                         additivity: ADDITIVITY_NONE,
@@ -1040,6 +1074,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_HP,
                         additivity: ADDITIVITY_NONE,
@@ -1055,6 +1090,7 @@ impl Archetypes {
                             centered: true,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_HP,
                         additivity: ADDITIVITY_NONE,
@@ -1068,6 +1104,7 @@ impl Archetypes {
                             filled: false,
                         },
                         pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
                         scale: Vec2::ones(),
                         color: COLOR_DEFAULT,
                         additivity: ADDITIVITY_NONE,
@@ -1109,6 +1146,7 @@ impl Archetypes {
                     centered: true,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 color: first_stage_color,
                 additivity: ADDITIVITY_NONE,
@@ -1144,6 +1182,7 @@ impl Archetypes {
             Drawable {
                 mesh: MeshType::Circle { radius, filled },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 color: first_stage_color,
                 additivity: ADDITIVITY_NONE,
@@ -1194,6 +1233,7 @@ impl Archetypes {
                     centered: false,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 depth: DEPTH_EFFECTS,
                 color: color,
@@ -1242,6 +1282,7 @@ impl Archetypes {
                     centered: true,
                 },
                 pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
                 scale: Vec2::ones(),
                 depth: DEPTH_EFFECTS,
                 color: COLOR_DEFAULT,
@@ -1777,8 +1818,9 @@ impl Scene for SceneStage {
                     muzzle_pos_relative,
                     45.0,
                 ));
-                self.commands
-                    .add_entity(Archetypes::new_projectile(muzzle_pos, player_dir));
+                self.commands.add_entity(Archetypes::new_projectile(
+                    muzzle_pos, player_dir, 4.0, COLOR_HP,
+                ));
             }
 
             // EXHAUST PARTICLES
@@ -1900,8 +1942,8 @@ impl Scene for SceneStage {
 
                 self.commands.add_entity(Archetypes::new_hit_effect(
                     xform.pos.clamped_to_rect(canvas_rect),
-                    3.0 * projectile.size,
-                    3.0 * projectile.size,
+                    7.0,
+                    7.0,
                     0.0,
                     COLOR_DEFAULT,
                     0.1,
