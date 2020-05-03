@@ -362,7 +362,7 @@ fn draw_drawable(
         return;
     }
 
-    let pos = xform.pos.pixel_snapped();
+    let pos = xform.pos;
     let scale = drawable.scale;
     let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
     let pivot = drawable.pos_offset;
