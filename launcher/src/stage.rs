@@ -4,6 +4,8 @@ use ct_lib::game::*;
 use ct_lib::math::*;
 use ct_lib::random::*;
 
+use ct_lib::dformat;
+
 use hecs::*;
 
 use std::collections::HashSet;
@@ -74,6 +76,48 @@ const COLORS_ALL: [Color; 10] = [
 type CollisionMask = u64;
 const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
+
+#[derive(Debug, Copy, Clone)]
+enum AttackType {
+    Neutral,
+    Double,
+    Triple,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Attack {
+    pub typename: AttackType,
+    pub name: &'static str,
+    pub name_abbreviation: &'static str,
+    pub reload_time: f32,
+    pub ammo_consumption_on_shot: f32,
+    pub color: Color,
+}
+
+const ATTACK_NEUTRAL: Attack = Attack {
+    typename: AttackType::Neutral,
+    name: "Neutral",
+    name_abbreviation: "N",
+    reload_time: 0.24,
+    ammo_consumption_on_shot: 0.0,
+    color: COLOR_DEFAULT,
+};
+const ATTACK_DOUBLE: Attack = Attack {
+    typename: AttackType::Double,
+    name: "Double",
+    name_abbreviation: "2",
+    reload_time: 0.32,
+    ammo_consumption_on_shot: 2.0,
+    color: COLOR_AMMO,
+};
+const ATTACK_TRIPLE: Attack = Attack {
+    typename: AttackType::Triple,
+    name: "Triple",
+    name_abbreviation: "3",
+    reload_time: 0.32,
+    ammo_consumption_on_shot: 3.0,
+    color: COLOR_BOOST,
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Shared Components
@@ -220,6 +264,7 @@ impl AutoremoveTimerFrames {
 
 #[derive(Debug, Copy, Clone)]
 struct Player {
+    pub attack: Attack,
     pub timer_tick: TriggerRepeating,
     pub timer_trail_particles: TriggerRepeating,
 
@@ -235,8 +280,7 @@ struct Player {
     pub width: f32,
     pub height: f32,
 
-    pub attack_timer: TriggerRepeating,
-    pub attack_speed: f32,
+    pub reload_timer: TriggerRepeating,
 
     pub hp: f32,
     pub hp_max: f32,
@@ -628,6 +672,7 @@ impl Archetypes {
         ship_type: ShipType,
     ) -> (Transform, Motion, Drawable, Player, Collider) {
         let player_size = 12.0;
+        let attack = ATTACK_TRIPLE;
         (
             Transform {
                 pos,
@@ -651,7 +696,8 @@ impl Archetypes {
                 visible: true,
             },
             Player {
-                attack_timer: TriggerRepeating::new(0.24),
+                attack: attack,
+                reload_timer: TriggerRepeating::new(attack.reload_time),
                 timer_tick: TriggerRepeating::new(5.0),
                 timer_trail_particles: TriggerRepeating::new(0.01),
 
@@ -666,8 +712,6 @@ impl Archetypes {
 
                 width: player_size,
                 height: player_size,
-
-                attack_speed: 2.0,
 
                 hp: 100.0,
                 hp_max: 100.0,
@@ -1711,6 +1755,10 @@ impl Scene for SceneStage {
             .world
             .query::<(&Transform, &mut Motion, &mut Player, &Collider)>()
         {
+            draw.debug_log_color(COLOR_AMMO, dformat!(player.ammo));
+            draw.debug_log_color(COLOR_HP, dformat!(player.hp));
+            draw.debug_log_color(COLOR_BOOST, dformat!(player.boost));
+
             for &collision_entity in &collider.collisions {
                 if let Some(ammo_component) = self.world.get::<Ammo>(collision_entity).ok() {
                     player.ammo = clampf(
@@ -1789,10 +1837,10 @@ impl Scene for SceneStage {
             let player_scale = Vec2::filled(player.width) / 4.0;
 
             // SHOOTING
-            if player
-                .attack_timer
-                .update_and_check(player.attack_speed * deltatime)
-            {
+            if player.reload_timer.update_and_check(deltatime) {
+                player.ammo -= player.attack.ammo_consumption_on_shot;
+
+                // Add muzzleflash
                 let shoot_points_relative: Vec<Vec2> = linestrip_transform(
                     &get_shoot_points_for_ship(player.ship_type),
                     Vec2::zero(),
@@ -1801,6 +1849,14 @@ impl Scene for SceneStage {
                     Vec2::unit_x(),
                     None,
                 );
+                let muzzle_pos_relative = shoot_points_relative.first().cloned().unwrap();
+                self.commands.add_entity(Archetypes::new_muzzleflash(
+                    player_entity,
+                    muzzle_pos_relative,
+                    45.0,
+                ));
+
+                // Add projectile(s)
                 let shoot_points: Vec<Vec2> = linestrip_transform(
                     &get_shoot_points_for_ship(player.ship_type),
                     player_pos,
@@ -1809,18 +1865,58 @@ impl Scene for SceneStage {
                     player_dir,
                     None,
                 );
-
-                let muzzle_pos_relative = shoot_points_relative.first().cloned().unwrap();
                 let muzzle_pos = shoot_points.first().cloned().unwrap();
 
-                self.commands.add_entity(Archetypes::new_muzzleflash(
-                    player_entity,
-                    muzzle_pos_relative,
-                    45.0,
-                ));
-                self.commands.add_entity(Archetypes::new_projectile(
-                    muzzle_pos, player_dir, 4.0, COLOR_HP,
-                ));
+                match player.attack.typename {
+                    AttackType::Neutral => {
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir,
+                            4.0,
+                            player.attack.color,
+                        ));
+                    }
+                    AttackType::Double => {
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir.rotated(deg_to_rad(15.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir.rotated(deg_to_rad(-15.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                    }
+                    AttackType::Triple => {
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir,
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir.rotated(deg_to_rad(15.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                        self.commands.add_entity(Archetypes::new_projectile(
+                            muzzle_pos,
+                            player_dir.rotated(deg_to_rad(-15.0)),
+                            4.0,
+                            player.attack.color,
+                        ));
+                    }
+                }
+
+                if player.ammo <= 0.0 {
+                    player.ammo = player.ammo_max;
+                    player.attack = ATTACK_NEUTRAL;
+                    player.reload_timer = TriggerRepeating::new(ATTACK_NEUTRAL.reload_time);
+                }
             }
 
             // EXHAUST PARTICLES
