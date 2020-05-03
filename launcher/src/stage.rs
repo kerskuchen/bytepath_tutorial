@@ -328,10 +328,10 @@ enum MeshType {
         centered: bool,
     },
     LineWithThickness {
-        start: Vec2,
-        end: Vec2,
+        length: f32,
         thickness: f32,
         smooth_edges: bool,
+        centered: bool,
     },
     Linestrip(Vec<Vec<(i32, i32)>>),
 }
@@ -362,7 +362,7 @@ fn draw_drawable(
         return;
     }
 
-    let pos = xform.pos;
+    let pos = xform.pos.pixel_snapped();
     let scale = drawable.scale;
     let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
     let pivot = drawable.pos_offset;
@@ -470,14 +470,23 @@ fn draw_drawable(
             }
         }
         MeshType::LineWithThickness {
-            start,
-            end,
+            length,
             thickness,
             smooth_edges,
+            centered,
         } => {
+            let (start, end) = if *centered {
+                (xform.pos, xform.pos + *length * dir)
+            } else {
+                (
+                    xform.pos - 0.5 * *length * dir,
+                    xform.pos + 0.5 * *length * dir,
+                )
+            };
+
             draw.draw_line_with_thickness(
-                *start,
-                *end,
+                start,
+                end,
                 *thickness,
                 *smooth_edges,
                 depth,
@@ -781,7 +790,7 @@ impl Archetypes {
         )
     }
 
-    fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, Drawable) {
+    fn new_projectile(pos: Vec2, dir: Vec2) -> (Transform, Motion, Projectile, DrawableMulti) {
         let projectile_size = 2.5;
         (
             Transform {
@@ -797,18 +806,20 @@ impl Archetypes {
             Projectile {
                 size: projectile_size,
             },
-            Drawable {
-                mesh: MeshType::Circle {
-                    radius: projectile_size,
-                    filled: false,
-                },
-                pos_offset: Vec2::zero(),
-                scale: Vec2::ones(),
-                add_jitter: false,
-                depth: DEPTH_PROJECTILE,
-                color: COLOR_DEFAULT,
-                additivity: ADDITIVITY_NONE,
-                visible: true,
+            DrawableMulti {
+                drawables: vec![Drawable {
+                    mesh: MeshType::Circle {
+                        radius: projectile_size,
+                        filled: false,
+                    },
+                    pos_offset: Vec2::zero(),
+                    scale: Vec2::ones(),
+                    add_jitter: false,
+                    depth: DEPTH_PROJECTILE,
+                    color: COLOR_DEFAULT,
+                    additivity: ADDITIVITY_NONE,
+                    visible: true,
+                }],
             },
         )
     }
@@ -1177,10 +1188,10 @@ impl Archetypes {
             },
             Drawable {
                 mesh: MeshType::LineWithThickness {
-                    start: pos,
-                    end: pos + length * dir,
+                    length,
                     thickness: thickness,
                     smooth_edges: false,
+                    centered: false,
                 },
                 pos_offset: Vec2::zero(),
                 scale: Vec2::ones(),
@@ -1847,13 +1858,13 @@ impl Scene for SceneStage {
             let speed = lerp(particle.speed, 0.0, percentage);
             let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
 
-            motion.vel = speed * Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle));
+            motion.vel = speed * dir;
 
             drawable.mesh = MeshType::LineWithThickness {
-                start: xform.pos.pixel_snapped(),
-                end: xform.pos.pixel_snapped() + length * dir,
+                length,
                 thickness: particle.thickness,
                 smooth_edges: false,
+                centered: false,
             };
         }
 
