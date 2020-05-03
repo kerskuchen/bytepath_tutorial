@@ -74,8 +74,8 @@ impl GameStateInterface for GameState {
             CANVAS_HEIGHT as u32,
         );
 
-        let font_default = draw.get_font("default_tiny_bordered");
-        let font_default_no_border = draw.get_font("default_tiny");
+        let font_default = draw.get_font("default_tiny_bordered").clone();
+        let font_default_no_border = draw.get_font("default_tiny").clone();
 
         let mut globals = Globals {
             random,

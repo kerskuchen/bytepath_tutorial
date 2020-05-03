@@ -445,6 +445,15 @@ enum MeshType {
         centered: bool,
     },
     Linestrip(Vec<Vec<(i32, i32)>>),
+    Text {
+        text: String,
+        font_name: String,
+        font_scale: f32,
+        origin_is_baseline: bool,
+        alignment_x: AlignmentHorizontal,
+        alignment_y: AlignmentVertical,
+        color_background: Option<Color>,
+    },
 }
 #[derive(Debug, Clone)]
 struct Drawable {
@@ -465,6 +474,7 @@ struct DrawableMulti {
 }
 
 fn draw_drawable(
+    fonts: &HashMap<String, SpriteFont>,
     draw: &mut Drawstate,
     globals: &mut Globals,
     xform: &Transform,
@@ -601,6 +611,34 @@ fn draw_drawable(
                 end,
                 *thickness,
                 *smooth_edges,
+                depth,
+                color,
+                additivity,
+            );
+        }
+        MeshType::Text {
+            text,
+            font_name,
+            font_scale,
+            origin_is_baseline,
+            alignment_x,
+            alignment_y,
+            color_background,
+        } => {
+            let font = fonts
+                .get(font_name)
+                .expect(&format!("Font '{}' not found in given fontmap", font_name));
+            draw.draw_pixel(pos, depth, color, additivity);
+            draw.draw_text_aligned(
+                text,
+                font,
+                *font_scale,
+                pos,
+                Vec2::zero(),
+                *origin_is_baseline,
+                *alignment_x,
+                *alignment_y,
+                *color_background,
                 depth,
                 color,
                 additivity,
@@ -1156,8 +1194,11 @@ impl Archetypes {
         attacktype: AttackType,
     ) -> (Transform, Motion, Collectible, Collider, DrawableMulti) {
         assert!(attacktype != AttackType::Neutral);
+        let attack = ATTACKS[&attacktype];
 
-        let color = ATTACKS[&attacktype].color;
+        let font_name = "gui_font".to_owned();
+        let label = attack.name_abbreviation.to_owned();
+        let color = attack.color;
         let size = 14.0;
         (
             Transform {
@@ -1205,6 +1246,25 @@ impl Archetypes {
                             height: 1.3 * size,
                             filled: false,
                             centered: true,
+                        },
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        color,
+                        additivity: ADDITIVITY_NONE,
+                        depth: DEPTH_COLLECTIBLES,
+                        add_jitter: false,
+                        visible: true,
+                    },
+                    Drawable {
+                        mesh: MeshType::Text {
+                            text: label,
+                            font_name,
+                            font_scale: 1.0,
+                            origin_is_baseline: false,
+                            alignment_x: AlignmentHorizontal::Center,
+                            alignment_y: AlignmentVertical::Center,
+                            color_background: None,
                         },
                         pos_offset: Vec2::zero(),
                         dir_angle_offset: 0.0,
@@ -1603,7 +1663,7 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
 pub struct SceneStage {
     skillpoint_count: usize,
 
-    gui_font: SpriteFont,
+    fonts: HashMap<String, SpriteFont>,
     world: World,
     commands: WorldCommandBuffer,
     player: Option<Entity>,
@@ -1628,9 +1688,12 @@ impl SceneStage {
         let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
         let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Rogue));
 
+        let mut fonts = HashMap::new();
+        fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
+
         SceneStage {
             skillpoint_count: 0,
-            gui_font: draw.get_font("default_tiny"),
+            fonts,
             world,
             player: Some(player),
             commands: WorldCommandBuffer::new(),
@@ -2540,14 +2603,17 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // INFOTEXT
 
-        for (entity, infotext) in &mut self.world.query::<&mut InfoText>() {
-            if infotext.update_and_check_if_finished(
-                draw,
-                &mut globals.random,
-                &self.gui_font,
-                deltatime,
-            ) {
-                self.commands.remove_entity(entity);
+        {
+            let gui_font = self.fonts.get("gui_font").unwrap();
+            for (entity, infotext) in &mut self.world.query::<&mut InfoText>() {
+                if infotext.update_and_check_if_finished(
+                    draw,
+                    &mut globals.random,
+                    gui_font,
+                    deltatime,
+                ) {
+                    self.commands.remove_entity(entity);
+                }
             }
         }
 
@@ -2558,11 +2624,11 @@ impl Scene for SceneStage {
             &mut self.world.query::<(&Transform, &DrawableMulti)>()
         {
             for drawable in &multi_drawable.drawables {
-                draw_drawable(draw, globals, xform, drawable);
+                draw_drawable(&self.fonts, draw, globals, xform, drawable);
             }
         }
         for (_entity, (xform, drawable)) in &mut self.world.query::<(&Transform, &Drawable)>() {
-            draw_drawable(draw, globals, xform, drawable);
+            draw_drawable(&self.fonts, draw, globals, xform, drawable);
         }
 
         //------------------------------------------------------------------------------------------
@@ -2590,35 +2656,37 @@ impl Scene for SceneStage {
         // CREATE / DELETE ENTITIES
 
         // INFOTEXT CREATION
-        for mut infotext_to_create in infotext_create_buffer.drain(..) {
-            // Collect existing infotext bounding boxes
-            let text_rects_existing: Vec<Recti> = {
-                let mut result = Vec::new();
-                for (_entity, infotext) in &mut self.world.query::<&InfoText>() {
-                    let infotext: &InfoText = infotext;
-                    let text: String = infotext.text.iter().collect();
-                    let rect = self
-                        .gui_font
+        {
+            let gui_font = self.fonts.get("gui_font").unwrap();
+            for mut infotext_to_create in infotext_create_buffer.drain(..) {
+                // Collect existing infotext bounding boxes
+                let text_rects_existing: Vec<Recti> = {
+                    let mut result = Vec::new();
+                    for (_entity, infotext) in &mut self.world.query::<&InfoText>() {
+                        let infotext: &InfoText = infotext;
+                        let text: String = infotext.text.iter().collect();
+                        let rect = gui_font
+                            .get_text_bounding_rect(&text, 1)
+                            .translated_by(infotext.pos.pixel_snapped_i32());
+                        result.push(rect);
+                    }
+                    result
+                };
+
+                // Check our bounding box against existing ones so that it does not overlap with
+                // any existing
+                let text_rect = {
+                    let text: String = infotext_to_create.text.iter().collect();
+                    gui_font
                         .get_text_bounding_rect(&text, 1)
-                        .translated_by(infotext.pos.pixel_snapped_i32());
-                    result.push(rect);
-                }
-                result
-            };
+                        .translated_by(infotext_to_create.pos.pixel_snapped_i32())
+                };
+                infotext_to_create.pos = text_rect
+                    .get_closest_position_without_overlapping(&text_rects_existing)
+                    .into();
 
-            // Check our bounding box against existing ones so that it does not overlap with
-            // any existing
-            let text_rect = {
-                let text: String = infotext_to_create.text.iter().collect();
-                self.gui_font
-                    .get_text_bounding_rect(&text, 1)
-                    .translated_by(infotext_to_create.pos.pixel_snapped_i32())
-            };
-            infotext_to_create.pos = text_rect
-                .get_closest_position_without_overlapping(&text_rects_existing)
-                .into();
-
-            self.world.spawn((infotext_to_create,));
+                self.world.spawn((infotext_to_create,));
+            }
         }
 
         self.commands.execute(&mut self.world);
