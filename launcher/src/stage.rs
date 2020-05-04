@@ -281,6 +281,7 @@ struct Motion {
 #[derive(Debug, Copy, Clone)]
 struct SnapToParent {
     pub parent: Entity,
+    pub remove_entity_if_lost_parent: bool,
 
     pub pos_snap: bool,
     pub pos_offset: Vec2,
@@ -374,7 +375,9 @@ struct Enemy {
     hitflash_timer: TimerSimple,
     radius: f32,
     can_shoot: bool,
-    shoot_timer: TimerSimple,
+    is_charging: bool,
+    timer_shoot: TimerSimple,
+    timer_charge: TriggerRepeating,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -693,6 +696,35 @@ where
 // Custom Entities that are to awkward to be combined from components
 
 #[derive(Debug, Clone)]
+struct EnemyChargeParticle {
+    pub muzzle_pos: Vec2,
+    pub muzzle_pos_offset: Vec2,
+    pub muzzle_entity: Entity,
+    pub size: f32,
+    pub timer: TimerSimple,
+    pub start_pos: Vec2,
+}
+impl EnemyChargeParticle {
+    fn new(
+        muzzle_pos: Vec2,
+        muzzle_pos_offset: Vec2,
+        muzzle_entity: Entity,
+        size: f32,
+        lifetime: f32,
+        start_pos: Vec2,
+    ) -> EnemyChargeParticle {
+        EnemyChargeParticle {
+            muzzle_pos,
+            muzzle_pos_offset,
+            muzzle_entity,
+            size,
+            timer: TimerSimple::new_started(lifetime),
+            start_pos,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct InfoText {
     pub pos: Vec2,
     pub timer: TimerSimple,
@@ -913,6 +945,7 @@ impl Archetypes {
                 pos_offset,
                 dir_angle_snap: true,
                 dir_angle_offset,
+                remove_entity_if_lost_parent: true,
             },
             Drawable {
                 mesh: MeshType::RectangleTransformed {
@@ -1594,6 +1627,7 @@ impl Archetypes {
                 pos_offset: Vec2::zero(),
                 dir_angle_snap: false,
                 dir_angle_offset: 0.0,
+                remove_entity_if_lost_parent: true,
             },
             AutoremoveTimer::new(lifetime),
             TickEffect {
@@ -1648,7 +1682,9 @@ impl Archetypes {
                 hitflash_timer: TimerSimple::new_stopped(0.1),
                 radius,
                 can_shoot: false,
-                shoot_timer: TimerSimple::new_stopped(1.0),
+                is_charging: false,
+                timer_shoot: TimerSimple::new_stopped(1.0),
+                timer_charge: TriggerRepeating::new(1.0),
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -1696,7 +1732,9 @@ impl Archetypes {
                 hitflash_timer: TimerSimple::new_stopped(0.1),
                 radius,
                 can_shoot: true,
-                shoot_timer: TimerSimple::new_started(4.0),
+                is_charging: false,
+                timer_shoot: TimerSimple::new_started(5.0),
+                timer_charge: TriggerRepeating::new_with_distinct_triggertimes(4.0, 0.02),
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -1941,9 +1979,8 @@ impl Scene for SceneStage {
         }
 
         // SNAPPING
-        for (_entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
-            if self.world.contains(snap.parent) {
-                let parent_xform = self.world.get::<Transform>(snap.parent).unwrap();
+        for (entity, (xform, snap)) in &mut self.world.query::<(&mut Transform, &SnapToParent)>() {
+            if let Some(parent_xform) = self.world.get::<Transform>(snap.parent).ok() {
                 if snap.pos_snap && snap.dir_angle_snap {
                     xform.pos = parent_xform.pos
                         + snap
@@ -1954,6 +1991,10 @@ impl Scene for SceneStage {
                     xform.pos = parent_xform.pos + snap.pos_offset;
                 } else if snap.dir_angle_snap {
                     xform.dir_angle = parent_xform.dir_angle + snap.dir_angle_offset;
+                }
+            } else {
+                if snap.remove_entity_if_lost_parent {
+                    self.commands.remove_entity(entity);
                 }
             }
         }
@@ -2037,9 +2078,7 @@ impl Scene for SceneStage {
                 .world
                 .query::<(&Transform, &mut Motion, &MoveTowardsTarget)>()
         {
-            if self.world.contains(follow.target) {
-                let target_xform = self.world.get::<Transform>(follow.target).unwrap();
-
+            if let Some(target_xform) = self.world.get::<Transform>(follow.target).ok() {
                 let dir_current = motion.vel.normalized();
                 let dir_target = (target_xform.pos - xform.pos).normalized();
                 let dir_final =
@@ -2226,11 +2265,28 @@ impl Scene for SceneStage {
                 .query::<(&Transform, &Motion, &mut Enemy, &Collider, &mut Drawable)>()
         {
             if enemy.can_shoot {
-                enemy.shoot_timer.update(deltatime);
-                if enemy.shoot_timer.is_finished() {
-                    enemy.shoot_timer =
-                        TimerSimple::new_started(globals.random.f32_in_range_closed(3.0, 5.0));
+                if enemy.timer_charge.update_and_check(deltatime) {
+                    // Spawn particle emitter
+                    let muzzle_pos = xform.pos + enemy.radius * motion.vel.normalized();
+                    let muzzle_pos_offset = enemy.radius * motion.vel.normalized();
+                    self.commands.add_entity((EnemyChargeParticle::new(
+                        muzzle_pos,
+                        muzzle_pos_offset,
+                        entity,
+                        globals.random.f32_in_range_closed(2.0, 3.0),
+                        globals.random.f32_in_range_closed(0.1, 0.3),
+                        globals.random.vec2_in_disk(muzzle_pos, 20.0),
+                    ),));
+                }
 
+                if enemy.timer_shoot.update_and_check_if_triggered(deltatime) {
+                    // Schedule next shot
+                    let shoot_time = globals.random.f32_in_range_closed(4.0, 6.0);
+                    enemy.timer_shoot = TimerSimple::new_started(shoot_time);
+                    enemy.timer_charge =
+                        TriggerRepeating::new_with_distinct_triggertimes(shoot_time - 1.0, 0.02);
+
+                    // Shoot projectile
                     let muzzle_pos = xform.pos + enemy.radius * motion.vel.normalized();
                     let player_pos =
                         if let Some(player_xform) = self.world.get::<Transform>(self.player).ok() {
@@ -3093,6 +3149,39 @@ impl Scene for SceneStage {
                     self.commands.remove_entity(entity);
                 }
             }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // ENEMY CHARGE PARTICLES
+
+        for (entity, particle) in &mut self.world.query::<&mut EnemyChargeParticle>() {
+            if particle.timer.update_and_check_if_triggered(deltatime) {
+                self.commands.remove_entity(entity);
+            }
+
+            if let Some(muzzle_entity_xform) =
+                self.world.get::<Transform>(particle.muzzle_entity).ok()
+            {
+                particle.muzzle_pos = muzzle_entity_xform.pos + particle.muzzle_pos_offset;
+            }
+
+            let pos = Vec2::lerp(
+                particle.start_pos,
+                particle.muzzle_pos,
+                particle.timer.completion_ratio(),
+            );
+            let size = lerp(particle.size, 0.0, particle.timer.completion_ratio());
+
+            draw.draw_rect_transformed(
+                Vec2::new(size, size),
+                Vec2::new(size, size) / 2.0,
+                pos,
+                Vec2::ones(),
+                Vec2::from_angle_flipped_y(deg_to_rad(45.0)),
+                DEPTH_EFFECTS,
+                COLOR_HP,
+                ADDITIVITY_NONE,
+            );
         }
 
         //------------------------------------------------------------------------------------------
