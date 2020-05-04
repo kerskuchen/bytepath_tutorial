@@ -14,7 +14,7 @@ use strum_macros::EnumIter;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-const DEBUG_DRAW_ENABLE: bool = false;
+const DEBUG_DRAW_ENABLE: bool = true;
 
 const DEPTH_BACKGROUND: Depth = 0.0;
 const DEPTH_PLAYER: Depth = 10.0;
@@ -77,8 +77,11 @@ const COLORS_ALL: [Color; 9] = [
 ];
 
 type CollisionMask = u64;
-const COLLISION_LAYER_PLAYER: u64 = 1 << 0;
-const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 1;
+const COLLISION_LAYER_ENEMY: u64 = 1 << 0;
+const COLLISION_LAYER_PLAYER: u64 = 1 << 1;
+const COLLISION_LAYER_ENEMY_PROJECTILE: u64 = 1 << 2;
+const COLLISION_LAYER_PLAYER_PROJECTILE: u64 = 1 << 3;
+const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 4;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
 enum AttackType {
@@ -363,6 +366,12 @@ struct Player {
 }
 
 #[derive(Debug, Copy, Clone)]
+struct Enemy {
+    hp: f32,
+    hp_max: f32,
+}
+
+#[derive(Debug, Copy, Clone)]
 enum CollectibleType {
     Boost(f32),
     Ammo(f32),
@@ -406,6 +415,7 @@ struct TickEffect {
 struct Projectile {
     pub length: f32,
     pub color: Color,
+    pub damage: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -948,7 +958,8 @@ impl Archetypes {
         dir: Vec2,
         length: f32,
         color: Color,
-    ) -> (Transform, Motion, Projectile, DrawableMulti) {
+        damage: f32,
+    ) -> (Transform, Motion, Projectile, Collider, DrawableMulti) {
         (
             Transform {
                 pos,
@@ -960,7 +971,17 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Projectile { length, color },
+            Projectile {
+                length,
+                color,
+                damage,
+            },
+            Collider {
+                radius: length,
+                layers_own: COLLISION_LAYER_PLAYER_PROJECTILE,
+                layers_affects: COLLISION_LAYER_ENEMY,
+                collisions: Vec::with_capacity(32),
+            },
             DrawableMulti {
                 drawables: vec![
                     Drawable {
@@ -1545,7 +1566,7 @@ impl Archetypes {
         dir_angle_vel: f32,
         radius: f32,
         linestrip: Vec<Vec2>,
-    ) -> (Transform, Motion, Collider, Drawable) {
+    ) -> (Transform, Motion, Collider, Enemy, Drawable) {
         (
             Transform { pos, dir_angle },
             Motion {
@@ -1556,9 +1577,13 @@ impl Archetypes {
             },
             Collider {
                 radius,
-                layers_own: COLLISION_LAYER_COLLECTIBLES,
-                layers_affects: 0,
+                layers_own: COLLISION_LAYER_ENEMY,
+                layers_affects: COLLISION_LAYER_PLAYER,
                 collisions: Vec::with_capacity(32),
+            },
+            Enemy {
+                hp: 100.0,
+                hp_max: 100.0,
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -2062,6 +2087,25 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // UPDATE ENEMY
+
+        for (entity, (xform, motion, enemy, collider)) in
+            &mut self
+                .world
+                .query::<(&Transform, &mut Motion, &mut Enemy, &Collider)>()
+        {
+            for &collision_entity in &collider.collisions {
+                if let Some(projectile) = self.world.get::<Projectile>(collision_entity).ok() {
+                    enemy.hp = clampf(enemy.hp - projectile.damage, 0.0, enemy.hp_max);
+                }
+            }
+
+            if enemy.hp == 0.0 {
+                self.commands.remove_entity(entity);
+            }
+        }
+
+        //------------------------------------------------------------------------------------------
         // UPDATE PLAYER
 
         for (player_entity, (player_xform, player_motion, player, collider)) in &mut self
@@ -2182,6 +2226,7 @@ impl Scene for SceneStage {
                             player_dir,
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                     }
                     AttackType::Double => {
@@ -2190,12 +2235,14 @@ impl Scene for SceneStage {
                             player_dir.rotated(deg_to_rad(15.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                     }
                     AttackType::Triple => {
@@ -2204,18 +2251,21 @@ impl Scene for SceneStage {
                             player_dir,
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(15.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                     }
                     AttackType::Spread => {
@@ -2226,6 +2276,7 @@ impl Scene for SceneStage {
                             player_dir.rotated(deg_to_rad(dir_angle_offset)),
                             4.0,
                             color,
+                            50.0,
                         ));
                     }
                     AttackType::Back => {
@@ -2236,12 +2287,14 @@ impl Scene for SceneStage {
                             player_dir,
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_back,
                             -player_dir,
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                     }
                     AttackType::Side => {
@@ -2254,18 +2307,21 @@ impl Scene for SceneStage {
                             player_dir,
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_left,
                             player_dir.rotated(deg_to_rad(90.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_right,
                             player_dir.rotated(deg_to_rad(-90.0)),
                             4.0,
                             player.attack.color,
+                            50.0,
                         ));
                     }
                 }
@@ -2387,11 +2443,19 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
 
-        for (entity, (xform, _projectile)) in
-            &mut self.world.query::<(&Transform, &mut Projectile)>()
+        for (entity, (xform, _projectile, collider)) in
+            &mut self.world.query::<(&Transform, &Projectile, &Collider)>()
         {
+            let mut explode = false;
+            if !collider.collisions.is_empty() {
+                explode = true;
+            }
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
             if !canvas_rect.contains_point(xform.pos) {
+                explode = true;
+            }
+
+            if explode {
                 self.commands.remove_entity(entity);
 
                 self.commands.add_entity(Archetypes::new_hit_effect(
