@@ -990,7 +990,7 @@ impl Archetypes {
             Collider {
                 radius: length,
                 layers_own: COLLISION_LAYER_PLAYER_PROJECTILE,
-                layers_affects: COLLISION_LAYER_ENEMY,
+                layers_affects: COLLISION_LAYER_ENEMY | COLLISION_LAYER_ENEMY_PROJECTILE,
                 collisions: Vec::with_capacity(32),
             },
             DrawableMulti {
@@ -1058,7 +1058,7 @@ impl Archetypes {
             Collider {
                 radius: length,
                 layers_own: COLLISION_LAYER_ENEMY_PROJECTILE,
-                layers_affects: COLLISION_LAYER_PLAYER,
+                layers_affects: COLLISION_LAYER_PLAYER | COLLISION_LAYER_PLAYER_PROJECTILE,
                 collisions: Vec::with_capacity(32),
             },
             DrawableMulti {
@@ -2018,11 +2018,14 @@ impl Scene for SceneStage {
             let body_a_entity = bodies[index_a].0;
             let body_b_entity = bodies[index_b].0;
 
-            let mut collider_a = self.world.get_mut::<Collider>(body_a_entity).unwrap();
-            let mut collider_b = self.world.get_mut::<Collider>(body_b_entity).unwrap();
-
-            collider_a.collisions.push(body_b_entity);
-            collider_b.collisions.push(body_a_entity);
+            {
+                let mut collider_a = self.world.get_mut::<Collider>(body_a_entity).unwrap();
+                collider_a.collisions.push(body_b_entity);
+            }
+            {
+                let mut collider_b = self.world.get_mut::<Collider>(body_b_entity).unwrap();
+                collider_b.collisions.push(body_a_entity);
+            }
         }
 
         //------------------------------------------------------------------------------------------
