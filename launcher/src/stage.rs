@@ -373,6 +373,8 @@ struct Enemy {
     hp_max: f32,
     hitflash_timer: TimerSimple,
     radius: f32,
+    can_shoot: bool,
+    shoot_timer: TimerSimple,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -789,7 +791,7 @@ impl Archetypes {
         ship_type: ShipType,
     ) -> (Transform, Motion, Drawable, Player, Collider) {
         let player_size = 12.0;
-        let attack = ATTACKS[&AttackType::Side];
+        let attack = ATTACKS[&AttackType::Neutral];
         (
             Transform {
                 pos,
@@ -964,6 +966,7 @@ impl Archetypes {
     fn new_projectile(
         pos: Vec2,
         dir: Vec2,
+        speed: f32,
         length: f32,
         color: Color,
         damage: f32,
@@ -974,7 +977,7 @@ impl Archetypes {
                 dir_angle: rad_to_deg(dir.to_angle_flipped_y()),
             },
             Motion {
-                vel: 200.0 * dir,
+                vel: speed * dir,
                 acc: Vec2::zero(),
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
@@ -1032,6 +1035,7 @@ impl Archetypes {
     fn new_enemy_projectile(
         pos: Vec2,
         dir: Vec2,
+        speed: f32,
         length: f32,
         damage: f32,
     ) -> (Transform, Motion, Projectile, Collider, DrawableMulti) {
@@ -1041,7 +1045,7 @@ impl Archetypes {
                 dir_angle: rad_to_deg(dir.to_angle_flipped_y()),
             },
             Motion {
-                vel: 200.0 * dir,
+                vel: speed * dir,
                 acc: Vec2::zero(),
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
@@ -1643,6 +1647,8 @@ impl Archetypes {
                 hp_max: 100.0,
                 hitflash_timer: TimerSimple::new_stopped(0.1),
                 radius,
+                can_shoot: false,
+                shoot_timer: TimerSimple::new_stopped(1.0),
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -1658,14 +1664,24 @@ impl Archetypes {
         )
     }
 
-    /*
     fn new_enemy_shooter(pos: Vec2, vel: Vec2) -> (Transform, Motion, Collider, Enemy, Drawable) {
+        let width = 12.0;
+        let height = 6.0;
+        let radius = f32::max(width, height);
+        let dir_angle = if vel.x >= 0.0 { 0.0 } else { -180.0 };
+        let linestrip = vec![
+            Vec2::new(width, 0.0),
+            Vec2::new(-width / 2.0, height),
+            Vec2::new(-width, 0.0),
+            Vec2::new(-width / 2.0, -height),
+            Vec2::new(width, 0.0),
+        ];
         (
             Transform { pos, dir_angle },
             Motion {
                 vel,
                 acc: Vec2::zero(),
-                dir_angle_vel,
+                dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
             Collider {
@@ -1679,6 +1695,8 @@ impl Archetypes {
                 hp_max: 100.0,
                 hitflash_timer: TimerSimple::new_stopped(0.1),
                 radius,
+                can_shoot: true,
+                shoot_timer: TimerSimple::new_started(4.0),
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -1693,7 +1711,6 @@ impl Archetypes {
             },
         )
     }
-    */
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1825,7 +1842,7 @@ pub struct SceneStage {
     fonts: HashMap<String, SpriteFont>,
     world: World,
     commands: WorldCommandBuffer,
-    player: Option<Entity>,
+    player: Entity,
 }
 
 impl Clone for SceneStage {
@@ -1845,7 +1862,7 @@ impl SceneStage {
         let mut world = World::new();
 
         let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
-        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Rogue));
+        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
 
         let mut fonts = HashMap::new();
         fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
@@ -1854,7 +1871,7 @@ impl SceneStage {
             skillpoint_count: 0,
             fonts,
             world,
-            player: Some(player),
+            player: player,
             commands: WorldCommandBuffer::new(),
         }
     }
@@ -2083,6 +2100,24 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
+        // SPAWN ENEMY SHOOTER
+
+        if input.keyboard.is_down(Scancode::T) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+
+            self.world.spawn(Archetypes::new_enemy_shooter(pos, vel));
+        }
+
+        //------------------------------------------------------------------------------------------
         // SPAWN ATTACK
 
         if input.keyboard.is_down(Scancode::A) {
@@ -2106,19 +2141,16 @@ impl Scene for SceneStage {
         // SPAWN AMMO
 
         if input.keyboard.is_down(Scancode::A) {
-            if let Some(player_entity) = self.player {
-                self.world.spawn(Archetypes::new_ammo_collectible(
-                    globals.random.vec2_in_rect(Rect::from_width_height(
-                        globals.canvas_width,
-                        globals.canvas_height,
-                    )),
-                    globals.random.vec2_in_unit_disk()
-                        * globals.random.f32_in_range_closed(10.0, 20.0),
-                    globals.random.f32_in_range_closed(0.0, 360.0),
-                    globals.random.f32_in_range_closed(-360.0, 360.0),
-                    player_entity,
-                ));
-            }
+            self.world.spawn(Archetypes::new_ammo_collectible(
+                globals.random.vec2_in_rect(Rect::from_width_height(
+                    globals.canvas_width,
+                    globals.canvas_height,
+                )),
+                globals.random.vec2_in_unit_disk() * globals.random.f32_in_range_closed(10.0, 20.0),
+                globals.random.f32_in_range_closed(0.0, 360.0),
+                globals.random.f32_in_range_closed(-360.0, 360.0),
+                self.player,
+            ));
         }
 
         //------------------------------------------------------------------------------------------
@@ -2185,11 +2217,37 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE ENEMY
 
-        for (entity, (xform, enemy, collider, drawable)) in
+        for (entity, (xform, motion, enemy, collider, drawable)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Enemy, &Collider, &mut Drawable)>()
+                .query::<(&Transform, &Motion, &mut Enemy, &Collider, &mut Drawable)>()
         {
+            if enemy.can_shoot {
+                enemy.shoot_timer.update(deltatime);
+                if enemy.shoot_timer.is_finished() {
+                    enemy.shoot_timer =
+                        TimerSimple::new_started(globals.random.f32_in_range_closed(3.0, 5.0));
+
+                    let muzzle_pos = xform.pos + enemy.radius * motion.vel.normalized();
+                    let player_pos =
+                        if let Some(player_xform) = self.world.get::<Transform>(self.player).ok() {
+                            player_xform.pos
+                        } else {
+                            globals.random.vec2_in_rect(Rect::from_width_height(
+                                globals.canvas_width,
+                                globals.canvas_height,
+                            ))
+                        };
+                    self.commands.add_entity(Archetypes::new_enemy_projectile(
+                        muzzle_pos,
+                        (player_pos - xform.pos).normalized(),
+                        globals.random.f32_in_range_closed(80.0, 100.0),
+                        4.0,
+                        10.0,
+                    ));
+                }
+            }
+
             enemy.hitflash_timer.update(deltatime);
             if enemy.hitflash_timer.is_running() {
                 drawable.color = COLOR_DEFAULT;
@@ -2208,6 +2266,14 @@ impl Scene for SceneStage {
             if enemy.hp == 0.0 {
                 self.commands.remove_entity(entity);
 
+                self.commands.add_entity(Archetypes::new_ammo_collectible(
+                    xform.pos + enemy.radius * globals.random.vec2_in_unit_disk(),
+                    globals.random.vec2_in_unit_disk()
+                        * globals.random.f32_in_range_closed(10.0, 20.0),
+                    globals.random.f32_in_range_closed(0.0, 360.0),
+                    globals.random.f32_in_range_closed(-360.0, 360.0),
+                    self.player,
+                ));
                 self.commands.add_entity(Archetypes::new_hit_effect(
                     xform.pos,
                     2.0 * enemy.radius,
@@ -2373,6 +2439,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir,
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2382,6 +2449,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(15.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2389,6 +2457,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2398,6 +2467,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir,
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2405,6 +2475,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(15.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2412,6 +2483,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(-15.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2423,6 +2495,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir.rotated(deg_to_rad(dir_angle_offset)),
+                            200.0,
                             4.0,
                             color,
                             50.0,
@@ -2434,6 +2507,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir,
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2441,6 +2515,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_back,
                             -player_dir,
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2454,6 +2529,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
                             player_dir,
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2461,6 +2537,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_left,
                             player_dir.rotated(deg_to_rad(90.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
@@ -2468,6 +2545,7 @@ impl Scene for SceneStage {
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_right,
                             player_dir.rotated(deg_to_rad(-90.0)),
+                            200.0,
                             4.0,
                             player.attack.color,
                             50.0,
