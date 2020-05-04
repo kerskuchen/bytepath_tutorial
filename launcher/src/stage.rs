@@ -444,7 +444,8 @@ enum MeshType {
         smooth_edges: bool,
         centered: bool,
     },
-    Linestrip(Vec<Vec<(i32, i32)>>),
+    Linestrips(Vec<Vec<(i32, i32)>>),
+    Linestrip(Vec<Vec2>),
     Text {
         text: String,
         font_name: String,
@@ -572,7 +573,7 @@ fn draw_drawable(
                 draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
             }
         }
-        MeshType::Linestrip(linestrips) => {
+        MeshType::Linestrips(linestrips) => {
             for linestrip_raw in linestrips {
                 let jitter = if drawable.add_jitter {
                     Some(&mut globals.random)
@@ -581,13 +582,18 @@ fn draw_drawable(
                 };
                 let linestrip: Vec<Vec2> =
                     linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
-                draw.draw_linestrip_bresenham(
-                    &linestrip,
-                    DEPTH_PLAYER,
-                    COLOR_DEFAULT,
-                    ADDITIVITY_NONE,
-                );
+                draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
             }
+        }
+        MeshType::Linestrip(linestrip_raw) => {
+            let jitter = if drawable.add_jitter {
+                Some(&mut globals.random)
+            } else {
+                None
+            };
+            let linestrip: Vec<Vec2> =
+                linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
+            draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
         }
         MeshType::LineWithThickness {
             length,
@@ -782,7 +788,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Drawable {
-                mesh: MeshType::Linestrip(get_draw_lines_for_ship(ship_type)),
+                mesh: MeshType::Linestrips(get_draw_lines_for_ship(ship_type)),
                 pos_offset: Vec2::zero(),
                 dir_angle_offset: 0.0,
                 scale: Vec2::filled(player_size) / 4.0,
@@ -1531,6 +1537,42 @@ impl Archetypes {
             },
         )
     }
+
+    fn new_enemy_rock(
+        pos: Vec2,
+        vel: Vec2,
+        dir_angle: f32,
+        dir_angle_vel: f32,
+        radius: f32,
+        linestrip: Vec<Vec2>,
+    ) -> (Transform, Motion, Collider, Drawable) {
+        (
+            Transform { pos, dir_angle },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel,
+                dir_angle_acc: 0.0,
+            },
+            Collider {
+                radius,
+                layers_own: COLLISION_LAYER_COLLECTIBLES,
+                layers_affects: 0,
+                collisions: Vec::with_capacity(32),
+            },
+            Drawable {
+                mesh: MeshType::Linestrip(linestrip),
+                pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
+                scale: Vec2::ones(),
+                color: COLOR_HP,
+                additivity: ADDITIVITY_NONE,
+                depth: DEPTH_COLLECTIBLES,
+                add_jitter: false,
+                visible: true,
+            },
+        )
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1864,6 +1906,59 @@ impl Scene for SceneStage {
                         .normalized();
                 motion.vel = motion.vel.magnitude() * dir_final;
             }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // SPAWN ENEMY ROCK
+
+        if input.keyboard.is_down(Scancode::R) {
+            let pos_offset = 10.0;
+            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
+                globals
+                    .random
+                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
+
+            fn create_irregular_polygon(
+                random: &mut Random,
+                vertex_count: usize,
+                radius: f32,
+            ) -> Vec<Vec2> {
+                let mut result = Vec::new();
+
+                let mut angle_current = 0.0;
+                let angle_increment = deg_to_rad(360.0 / vertex_count as f32);
+                for _ in 0..vertex_count {
+                    let distance = radius + random.f32_in_range_closed(-radius / 4.0, radius / 4.0);
+                    let angle = angle_current
+                        + random.f32_in_range_closed(-angle_increment / 4.0, angle_increment / 4.0);
+                    let pos = Vec2::new(distance * f32::cos(angle), distance * f32::sin(angle));
+                    result.push(pos);
+
+                    angle_current += angle_increment;
+                }
+
+                // Connect the last vertex with the first
+                let first = result.first().unwrap().clone();
+                result.push(first);
+
+                result
+            }
+
+            let radius = 8.0;
+            let linestrip = create_irregular_polygon(&mut globals.random, 8, 10.0);
+            self.world.spawn(Archetypes::new_enemy_rock(
+                pos,
+                vel,
+                globals.random.f32_in_range_closed(0.0, 360.0),
+                globals.random.f32_in_range_closed(-360.0, 360.0),
+                radius,
+                linestrip,
+            ));
         }
 
         //------------------------------------------------------------------------------------------
