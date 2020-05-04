@@ -1029,6 +1029,55 @@ impl Archetypes {
         )
     }
 
+    fn new_enemy_projectile(
+        pos: Vec2,
+        dir: Vec2,
+        length: f32,
+        damage: f32,
+    ) -> (Transform, Motion, Projectile, Collider, DrawableMulti) {
+        (
+            Transform {
+                pos,
+                dir_angle: rad_to_deg(dir.to_angle_flipped_y()),
+            },
+            Motion {
+                vel: 200.0 * dir,
+                acc: Vec2::zero(),
+                dir_angle_vel: 0.0,
+                dir_angle_acc: 0.0,
+            },
+            Projectile {
+                length,
+                color: COLOR_HP,
+                damage,
+            },
+            Collider {
+                radius: length,
+                layers_own: COLLISION_LAYER_ENEMY_PROJECTILE,
+                layers_affects: COLLISION_LAYER_PLAYER,
+                collisions: Vec::with_capacity(32),
+            },
+            DrawableMulti {
+                drawables: vec![Drawable {
+                    mesh: MeshType::LineWithThickness {
+                        length: 2.0 * length,
+                        thickness: 0.4 * length,
+                        smooth_edges: false,
+                        centered: true,
+                    },
+                    pos_offset: Vec2::zero(),
+                    dir_angle_offset: 0.0,
+                    scale: Vec2::ones(),
+                    add_jitter: false,
+                    depth: DEPTH_PROJECTILE,
+                    color: COLOR_HP,
+                    additivity: ADDITIVITY_NONE,
+                    visible: true,
+                }],
+            },
+        )
+    }
+
     fn new_ammo_collectible(
         pos: Vec2,
         vel: Vec2,
@@ -1608,6 +1657,43 @@ impl Archetypes {
             },
         )
     }
+
+    /*
+    fn new_enemy_shooter(pos: Vec2, vel: Vec2) -> (Transform, Motion, Collider, Enemy, Drawable) {
+        (
+            Transform { pos, dir_angle },
+            Motion {
+                vel,
+                acc: Vec2::zero(),
+                dir_angle_vel,
+                dir_angle_acc: 0.0,
+            },
+            Collider {
+                radius,
+                layers_own: COLLISION_LAYER_ENEMY,
+                layers_affects: COLLISION_LAYER_PLAYER,
+                collisions: Vec::with_capacity(32),
+            },
+            Enemy {
+                hp: 100.0,
+                hp_max: 100.0,
+                hitflash_timer: TimerSimple::new_stopped(0.1),
+                radius,
+            },
+            Drawable {
+                mesh: MeshType::Linestrip(linestrip),
+                pos_offset: Vec2::zero(),
+                dir_angle_offset: 0.0,
+                scale: Vec2::ones(),
+                color: COLOR_HP,
+                additivity: ADDITIVITY_NONE,
+                depth: DEPTH_COLLECTIBLES,
+                add_jitter: false,
+                visible: true,
+            },
+        )
+    }
+    */
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2163,10 +2249,10 @@ impl Scene for SceneStage {
                 drawable.visible = true;
             }
 
-            let mut player_damage: Option<f32> = None;
+            let mut player_damage: f32 = 0.0;
             let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
             if !canvas_rect.contains_point(player_xform.pos) {
-                player_damage = Some(player.hp_max);
+                player_damage += player.hp_max;
             }
 
             for &collision_entity in &collider.collisions {
@@ -2197,12 +2283,12 @@ impl Scene for SceneStage {
                 }
                 if let Some(_enemy) = self.world.get::<Enemy>(collision_entity).ok() {
                     if !player.invincible_timer.is_running() {
-                        if player_damage.is_some() {
-                            player_damage =
-                                player_damage.map(|existing_damage| existing_damage + 30.0);
-                        } else {
-                            player_damage = Some(30.0);
-                        }
+                        player_damage += 30.0;
+                    }
+                }
+                if let Some(projectile) = self.world.get::<Projectile>(collision_entity).ok() {
+                    if !player.invincible_timer.is_running() {
+                        player_damage += projectile.damage;
                     }
                 }
             }
@@ -2428,13 +2514,13 @@ impl Scene for SceneStage {
             }
 
             // TAKING DAMAGE
-            if let Some(damage) = player_damage {
-                player.hp = clampf(player.hp - damage, 0.0, player.hp_max);
+            if player_damage > 0.0 {
+                player.hp = clampf(player.hp - player_damage, 0.0, player.hp_max);
 
                 if player.hp == 0.0 {
                     self.commands.remove_entity(player_entity);
                 } else {
-                    if damage >= 30.0 {
+                    if player_damage >= 30.0 {
                         player.invincible_timer.restart();
                     }
                 }
@@ -2452,7 +2538,7 @@ impl Scene for SceneStage {
                     if player.hp == 0.0 {
                         (6.0, 0.2, 80.0, 1.0, 0.15, 16, 32, 4)
                     } else {
-                        if damage >= 30.0 {
+                        if player_damage >= 30.0 {
                             (6.0, 0.2, 80.0, 0.5, 0.25, 8, 16, 3)
                         } else {
                             (6.0, 0.1, 80.0, 0.25, 0.75, 4, 8, 2)
