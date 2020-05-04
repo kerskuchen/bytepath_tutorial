@@ -14,7 +14,7 @@ use strum_macros::EnumIter;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-const DEBUG_DRAW_ENABLE: bool = true;
+const DEBUG_DRAW_ENABLE: bool = false;
 
 const DEPTH_BACKGROUND: Depth = 0.0;
 const DEPTH_PLAYER: Depth = 10.0;
@@ -355,6 +355,8 @@ struct Player {
     pub hp: f32,
     pub hp_max: f32,
 
+    pub invincible_timer: TimerSimple,
+
     pub ammo: f32,
     pub ammo_max: f32,
 
@@ -369,6 +371,8 @@ struct Player {
 struct Enemy {
     hp: f32,
     hp_max: f32,
+    hitflash_timer: TimerSimple,
+    radius: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -810,32 +814,35 @@ impl Archetypes {
             },
             Player {
                 attack: attack,
-                reload_timer: TriggerRepeating::new(attack.reload_time),
                 timer_tick: TriggerRepeating::new(5.0),
                 timer_trail_particles: TriggerRepeating::new(0.01),
-
                 ship_type,
 
                 speed: 0.0,
+
                 speed_max: 100.0,
                 speed_base_max: 100.0,
                 acc: 100.0,
-
                 turn_speed: 1.66 * 180.0,
 
                 width: player_size,
+
                 height: player_size,
+                reload_timer: TriggerRepeating::new(attack.reload_time),
 
                 hp: 100.0,
                 hp_max: 100.0,
 
-                ammo: 100.0,
-                ammo_max: 100.0,
+                invincible_timer: TimerSimple::new_stopped(2.0),
 
+                ammo: 100.0,
+
+                ammo_max: 100.0,
                 boost: 100.0,
                 boost_max: 100.0,
-                boost_cooldown_time: 2.0,
                 boost_allowed: true,
+                boost_cooldown_time: 2.0,
+
                 boost_cooldown_timer: TimerSimple::new_stopped(1.0),
             },
             Collider {
@@ -851,9 +858,10 @@ impl Archetypes {
     fn new_screenflash(
         canvas_width: f32,
         canvas_height: f32,
+        framecount: usize,
     ) -> (AutoremoveTimerFrames, Transform, Drawable) {
         (
-            AutoremoveTimerFrames::new(4),
+            AutoremoveTimerFrames::new(framecount),
             Transform {
                 pos: Vec2::zero(),
                 dir_angle: 0.0,
@@ -1584,6 +1592,8 @@ impl Archetypes {
             Enemy {
                 hp: 100.0,
                 hp_max: 100.0,
+                hitflash_timer: TimerSimple::new_stopped(0.1),
+                radius,
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -2089,32 +2099,75 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE ENEMY
 
-        for (entity, (xform, motion, enemy, collider)) in
+        for (entity, (xform, enemy, collider, drawable)) in
             &mut self
                 .world
-                .query::<(&Transform, &mut Motion, &mut Enemy, &Collider)>()
+                .query::<(&Transform, &mut Enemy, &Collider, &mut Drawable)>()
         {
+            enemy.hitflash_timer.update(deltatime);
+            if enemy.hitflash_timer.is_running() {
+                drawable.color = COLOR_DEFAULT;
+            } else {
+                drawable.color = COLOR_HP;
+            }
+
+            let mut got_hit = false;
             for &collision_entity in &collider.collisions {
                 if let Some(projectile) = self.world.get::<Projectile>(collision_entity).ok() {
                     enemy.hp = clampf(enemy.hp - projectile.damage, 0.0, enemy.hp_max);
+                    got_hit = true;
                 }
             }
 
             if enemy.hp == 0.0 {
                 self.commands.remove_entity(entity);
+
+                self.commands.add_entity(Archetypes::new_hit_effect(
+                    xform.pos,
+                    2.0 * enemy.radius,
+                    2.0 * enemy.radius,
+                    0.0,
+                    COLOR_DEFAULT,
+                    0.1,
+                    COLOR_HP,
+                    0.15,
+                    true,
+                ));
+            } else {
+                if got_hit {
+                    enemy.hitflash_timer.restart();
+                }
             }
         }
 
         //------------------------------------------------------------------------------------------
         // UPDATE PLAYER
 
-        for (player_entity, (player_xform, player_motion, player, collider)) in &mut self
-            .world
-            .query::<(&Transform, &mut Motion, &mut Player, &Collider)>()
+        for (player_entity, (player_xform, player_motion, player, collider, drawable)) in
+            &mut self.world.query::<(
+                &Transform,
+                &mut Motion,
+                &mut Player,
+                &Collider,
+                &mut Drawable,
+            )>()
         {
             draw.debug_log_color(COLOR_AMMO, dformat!(player.ammo));
             draw.debug_log_color(COLOR_HP, dformat!(player.hp));
             draw.debug_log_color(COLOR_BOOST, dformat!(player.boost));
+
+            player.invincible_timer.update(deltatime);
+            if player.invincible_timer.is_running() {
+                drawable.visible = floori(player.invincible_timer.time_cur / 0.04) % 2 != 0;
+            } else {
+                drawable.visible = true;
+            }
+
+            let mut player_damage: Option<f32> = None;
+            let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
+            if !canvas_rect.contains_point(player_xform.pos) {
+                player_damage = Some(player.hp_max);
+            }
 
             for &collision_entity in &collider.collisions {
                 if let Some(collectible) = self.world.get::<Collectible>(collision_entity).ok() {
@@ -2139,6 +2192,16 @@ impl Scene for SceneStage {
                             player.ammo = player.ammo_max;
                             player.attack = ATTACKS[&attacktype];
                             player.reload_timer = TriggerRepeating::new(player.attack.reload_time);
+                        }
+                    }
+                }
+                if let Some(_enemy) = self.world.get::<Enemy>(collision_entity).ok() {
+                    if !player.invincible_timer.is_running() {
+                        if player_damage.is_some() {
+                            player_damage =
+                                player_damage.map(|existing_damage| existing_damage + 30.0);
+                        } else {
+                            player_damage = Some(30.0);
                         }
                     }
                 }
@@ -2364,25 +2427,62 @@ impl Scene for SceneStage {
                     .add_entity(Archetypes::new_tick_effect(player_entity));
             }
 
-            // EXPLODE
-            let canvas_rect = Rect::from_width_height(globals.canvas_width, globals.canvas_height);
-            if !canvas_rect.contains_point(player_xform.pos) {
-                self.commands.remove_entity(player_entity);
+            // TAKING DAMAGE
+            if let Some(damage) = player_damage {
+                player.hp = clampf(player.hp - damage, 0.0, player.hp_max);
 
-                let screen_shake = ModulatorScreenShake::new(&mut globals.random, 6.0, 0.2, 80.0);
+                if player.hp == 0.0 {
+                    self.commands.remove_entity(player_entity);
+                } else {
+                    if damage >= 30.0 {
+                        player.invincible_timer.restart();
+                    }
+                }
+
+                let (
+                    screenshake_amplitude,
+                    screenshake_duration,
+                    screenshake_frequency,
+                    slowmotion_time,
+                    slowmotion_factor,
+                    particle_count_min,
+                    particle_count_max,
+                    screenflash_framecount,
+                ) = {
+                    if player.hp == 0.0 {
+                        (6.0, 0.2, 80.0, 1.0, 0.15, 16, 32, 4)
+                    } else {
+                        if damage >= 30.0 {
+                            (6.0, 0.2, 80.0, 0.5, 0.25, 8, 16, 3)
+                        } else {
+                            (6.0, 0.1, 80.0, 0.25, 0.75, 4, 8, 2)
+                        }
+                    }
+                };
+
+                let screen_shake = ModulatorScreenShake::new(
+                    &mut globals.random,
+                    screenshake_amplitude,
+                    screenshake_duration,
+                    screenshake_frequency,
+                );
                 globals.camera.add_shake(screen_shake);
 
                 self.commands.add_entity((SlowMotion {
-                    timer_tween: TimerSimple::new_started(1.0),
-                    deltatime_speed_factor: 0.15,
+                    timer_tween: TimerSimple::new_started(slowmotion_time),
+                    deltatime_speed_factor: slowmotion_factor,
                 },));
 
                 self.commands.add_entity(Archetypes::new_screenflash(
                     globals.canvas_width,
                     globals.canvas_height,
+                    screenflash_framecount,
                 ));
 
-                for _ in 0..globals.random.gen_range(15, 25) {
+                for _ in 0..globals
+                    .random
+                    .gen_range(particle_count_min, particle_count_max)
+                {
                     self.commands.add_entity(Archetypes::new_explode_particle(
                         player_xform.pos,
                         rad_to_deg(globals.random.vec2_in_unit_disk().to_angle_flipped_y()),
