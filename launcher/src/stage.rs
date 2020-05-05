@@ -84,7 +84,7 @@ const COLLISION_LAYER_PLAYER_PROJECTILE: u64 = 1 << 3;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 4;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
-enum AttackType {
+pub enum AttackType {
     Neutral,
     Double,
     Triple,
@@ -92,6 +92,13 @@ enum AttackType {
     Spread,
     Back,
     Side,
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
+pub enum ResourceType {
+    Boost,
+    Skillpoint,
+    Health,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1655,13 +1662,40 @@ impl Archetypes {
     }
 
     fn new_enemy_rock(
+        random: &mut Random,
         pos: Vec2,
         vel: Vec2,
-        dir_angle: f32,
-        dir_angle_vel: f32,
         radius: f32,
-        linestrip: Vec<Vec2>,
     ) -> (Transform, Motion, Collider, Enemy, Drawable) {
+        fn create_irregular_polygon(
+            random: &mut Random,
+            vertex_count: usize,
+            radius: f32,
+        ) -> Vec<Vec2> {
+            let mut result = Vec::new();
+
+            let mut angle_current = 0.0;
+            let angle_increment = deg_to_rad(360.0 / vertex_count as f32);
+            for _ in 0..vertex_count {
+                let distance = radius + random.f32_in_range_closed(-radius / 4.0, radius / 4.0);
+                let angle = angle_current
+                    + random.f32_in_range_closed(-angle_increment / 4.0, angle_increment / 4.0);
+                let pos = Vec2::new(distance * f32::cos(angle), distance * f32::sin(angle));
+                result.push(pos);
+
+                angle_current += angle_increment;
+            }
+
+            // Connect the last vertex with the first
+            let first = result.first().unwrap().clone();
+            result.push(first);
+
+            result
+        }
+
+        let dir_angle = random.f32_in_range_closed(0.0, 360.0);
+        let dir_angle_vel = random.f32_in_range_closed(-360.0, 360.0);
+        let linestrip = create_irregular_polygon(random, 8, 10.0);
         (
             Transform { pos, dir_angle },
             Motion {
@@ -1872,11 +1906,162 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Director
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum EnemyType {
+    Rock,
+    Shooter,
+}
+
+pub struct Director {
+    pub difficulty: usize,
+    pub timer_spawn_attack: TriggerRepeating,
+    pub timer_spawn_resource: TriggerRepeating,
+    pub timer_round: TimerSimple,
+    pub round_duration: f32,
+    pub round_enemies_and_spawntimes: std::collections::VecDeque<(EnemyType, f32)>,
+}
+impl Director {
+    pub fn new(random: &mut Random) -> Director {
+        let difficulty = 1;
+        let round_duration = 22.0;
+        Director {
+            difficulty,
+            timer_spawn_attack: TriggerRepeating::new(30.0),
+            timer_spawn_resource: TriggerRepeating::new(16.0),
+            timer_round: TimerSimple::new_started(round_duration),
+            round_duration,
+            round_enemies_and_spawntimes: Director::create_enemies_and_spawntimes(
+                random,
+                difficulty,
+                round_duration,
+            ),
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        random: &mut Random,
+        deltatime: f32,
+    ) -> (Option<EnemyType>, Option<ResourceType>, Option<AttackType>) {
+        self.timer_round.update(deltatime);
+
+        let attack_to_spawn = if self.timer_spawn_attack.update_and_check(deltatime) {
+            let attacktypes: Vec<AttackType> = AttackType::iter().skip(1).collect();
+            let attacktype = random.pick_from_slice(&attacktypes);
+            Some(attacktype)
+        } else {
+            None
+        };
+
+        let resource_to_spawn = if self.timer_spawn_resource.update_and_check(deltatime) {
+            let resourcetypes: Vec<ResourceType> = ResourceType::iter().collect();
+            let resourcetype = random.pick_from_slice(&resourcetypes);
+            Some(resourcetype)
+        } else {
+            None
+        };
+
+        let enemy_to_spawn = {
+            if let Some((enemy, spawn_time)) = self.round_enemies_and_spawntimes.front().cloned() {
+                if spawn_time <= self.timer_round.time_cur {
+                    self.round_enemies_and_spawntimes.pop_front();
+                    Some(enemy)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // Update difficulty
+        if self.timer_round.is_finished() {
+            self.timer_round.restart();
+            self.difficulty += 1;
+            self.round_enemies_and_spawntimes = Director::create_enemies_and_spawntimes(
+                random,
+                self.difficulty,
+                self.round_duration,
+            );
+        }
+
+        (enemy_to_spawn, resource_to_spawn, attack_to_spawn)
+    }
+
+    fn create_enemies_and_spawntimes(
+        random: &mut Random,
+        difficulty: usize,
+        round_duration: f32,
+    ) -> std::collections::VecDeque<(EnemyType, f32)> {
+        let enemy_spawn_chances = Director::get_enemy_spawn_chance(random, difficulty);
+
+        let mut points = Director::get_spending_points_for_difficulty(difficulty);
+        let mut enemybag = Shufflebag::new_with_counts(&enemy_spawn_chances);
+        let mut enemies = Vec::new();
+
+        while points > 0 {
+            let enemy = enemybag.get_next(random);
+            points -= Director::get_spending_cost_for_enemy(enemy);
+            enemies.push(enemy);
+        }
+
+        let mut spawn_times = Vec::new();
+        for _ in 0..enemies.len() {
+            spawn_times.push(random.f32_in_range_open(0.0, round_duration))
+        }
+        spawn_times.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+        enemies.into_iter().zip(spawn_times.into_iter()).collect()
+    }
+
+    fn get_spending_points_for_difficulty(difficulty: usize) -> i32 {
+        let mut points = 16;
+        for n in 1..difficulty {
+            points = if (n - 1) % 4 == 0 {
+                points + 8
+            } else if (n - 1) % 4 == 1 {
+                points
+            } else if (n - 1) % 4 == 2 {
+                (points as f32 / 1.5) as i32
+            } else {
+                points * 2
+            };
+        }
+
+        points
+    }
+
+    fn get_enemy_spawn_chance(random: &mut Random, difficulty: usize) -> Vec<(EnemyType, usize)> {
+        match difficulty {
+            0 => unimplemented!("There is no difficulty 0"),
+            1 => vec![(EnemyType::Rock, 1)],
+            2 => vec![(EnemyType::Rock, 8), (EnemyType::Shooter, 4)],
+            3 => vec![(EnemyType::Rock, 8), (EnemyType::Shooter, 8)],
+            4 => vec![(EnemyType::Rock, 4), (EnemyType::Shooter, 8)],
+            _ => vec![
+                (EnemyType::Rock, random.gen_range(2, 12)),
+                (EnemyType::Shooter, random.gen_range(2, 12)),
+            ],
+        }
+    }
+
+    fn get_spending_cost_for_enemy(enemytype: EnemyType) -> i32 {
+        match enemytype {
+            EnemyType::Rock => 1,
+            EnemyType::Shooter => 2,
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Stage Scene
 
 pub struct SceneStage {
     skillpoint_count: usize,
 
+    director: Director,
     fonts: HashMap<String, SpriteFont>,
     world: World,
     commands: WorldCommandBuffer,
@@ -1906,6 +2091,7 @@ impl SceneStage {
         fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
 
         SceneStage {
+            director: Director::new(&mut globals.random),
             skillpoint_count: 0,
             fonts,
             world,
@@ -1945,6 +2131,102 @@ impl Scene for SceneStage {
             if slowmotion.timer_tween.is_finished() {
                 self.commands.remove_entity(slowmotion_entity);
             }
+        }
+
+        //------------------------------------------------------------------------------------------
+        // UPDATE DIRECTOR
+
+        draw.debug_log_color(Color::magenta(), dformat!(self.director.difficulty));
+
+        let (enemy_to_spawn, resource_to_spawn, attack_to_spawn) =
+            self.director.update(&mut globals.random, deltatime);
+
+        fn create_spawn_pos_vel(
+            random: &mut Random,
+            canvas_width: f32,
+            canvas_height: f32,
+        ) -> (Vec2, Vec2) {
+            let pos_offset = 10.0;
+            let dir = random.pick_from_slice(&[-1.0, 1.0]);
+
+            let pos = Vec2::new(
+                canvas_width / 2.0 + dir * (canvas_width / 2.0 + pos_offset),
+                random.f32_in_range_closed(pos_offset, canvas_height - pos_offset),
+            );
+            let vel = Vec2::filled_x(-dir * random.f32_in_range_closed(20.0, 40.0));
+
+            (pos, vel)
+        }
+
+        // Spawn enemies
+        if let Some(enemytype) = enemy_to_spawn {
+            let (pos, vel) = create_spawn_pos_vel(
+                &mut globals.random,
+                globals.canvas_width,
+                globals.canvas_height,
+            );
+            match enemytype {
+                EnemyType::Rock => self.world.spawn(Archetypes::new_enemy_rock(
+                    &mut globals.random,
+                    pos,
+                    vel,
+                    8.0,
+                )),
+                EnemyType::Shooter => self.world.spawn(Archetypes::new_enemy_shooter(pos, vel)),
+            };
+        }
+
+        // Spawn resources
+        if let Some(resourcetype) = resource_to_spawn {
+            let (pos, vel) = create_spawn_pos_vel(
+                &mut globals.random,
+                globals.canvas_width,
+                globals.canvas_height,
+            );
+            match resourcetype {
+                ResourceType::Boost => self.world.spawn(Archetypes::new_boost_collectible(
+                    pos,
+                    vel,
+                    globals.random.f32_in_range_closed(0.0, 360.0),
+                    globals.random.f32_in_range_closed(-360.0, 360.0),
+                )),
+                ResourceType::Skillpoint => {
+                    self.world.spawn(Archetypes::new_skillpoints_collectible(
+                        pos,
+                        vel,
+                        globals.random.f32_in_range_closed(0.0, 360.0),
+                        globals.random.f32_in_range_closed(-360.0, 360.0),
+                    ))
+                }
+                ResourceType::Health => self.world.spawn(Archetypes::new_hp_collectible(pos, vel)),
+            };
+        }
+
+        // Spawn attacks
+        if let Some(attacktype) = attack_to_spawn {
+            let (pos, vel) = create_spawn_pos_vel(
+                &mut globals.random,
+                globals.canvas_width,
+                globals.canvas_height,
+            );
+            self.world
+                .spawn(Archetypes::new_attack_collectible(pos, vel, attacktype));
+        }
+
+        //------------------------------------------------------------------------------------------
+        // SPAWN AMMO
+
+        if input.keyboard.is_down(Scancode::A) {
+            self.world.spawn(Archetypes::new_ammo_collectible(
+                globals.random.vec2_in_rect(Rect::from_width_height(
+                    globals.canvas_width,
+                    globals.canvas_height,
+                )),
+                globals.random.vec2_in_unit_disk() * globals.random.f32_in_range_closed(10.0, 20.0),
+                globals.random.f32_in_range_closed(0.0, 360.0),
+                globals.random.f32_in_range_closed(-360.0, 360.0),
+                self.player,
+            ));
         }
 
         //------------------------------------------------------------------------------------------
@@ -2089,174 +2371,6 @@ impl Scene for SceneStage {
         }
 
         //------------------------------------------------------------------------------------------
-        // SPAWN ENEMY ROCK
-
-        if input.keyboard.is_down(Scancode::R) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-
-            fn create_irregular_polygon(
-                random: &mut Random,
-                vertex_count: usize,
-                radius: f32,
-            ) -> Vec<Vec2> {
-                let mut result = Vec::new();
-
-                let mut angle_current = 0.0;
-                let angle_increment = deg_to_rad(360.0 / vertex_count as f32);
-                for _ in 0..vertex_count {
-                    let distance = radius + random.f32_in_range_closed(-radius / 4.0, radius / 4.0);
-                    let angle = angle_current
-                        + random.f32_in_range_closed(-angle_increment / 4.0, angle_increment / 4.0);
-                    let pos = Vec2::new(distance * f32::cos(angle), distance * f32::sin(angle));
-                    result.push(pos);
-
-                    angle_current += angle_increment;
-                }
-
-                // Connect the last vertex with the first
-                let first = result.first().unwrap().clone();
-                result.push(first);
-
-                result
-            }
-
-            let radius = 8.0;
-            let linestrip = create_irregular_polygon(&mut globals.random, 8, 10.0);
-            self.world.spawn(Archetypes::new_enemy_rock(
-                pos,
-                vel,
-                globals.random.f32_in_range_closed(0.0, 360.0),
-                globals.random.f32_in_range_closed(-360.0, 360.0),
-                radius,
-                linestrip,
-            ));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN ENEMY SHOOTER
-
-        if input.keyboard.is_down(Scancode::T) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-
-            self.world.spawn(Archetypes::new_enemy_shooter(pos, vel));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN ATTACK
-
-        if input.keyboard.is_down(Scancode::A) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            let attacktypes: Vec<AttackType> = AttackType::iter().skip(1).collect();
-            let attacktype = globals.random.pick_from_slice(&attacktypes);
-            self.world
-                .spawn(Archetypes::new_attack_collectible(pos, vel, attacktype));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN AMMO
-
-        if input.keyboard.is_down(Scancode::A) {
-            self.world.spawn(Archetypes::new_ammo_collectible(
-                globals.random.vec2_in_rect(Rect::from_width_height(
-                    globals.canvas_width,
-                    globals.canvas_height,
-                )),
-                globals.random.vec2_in_unit_disk() * globals.random.f32_in_range_closed(10.0, 20.0),
-                globals.random.f32_in_range_closed(0.0, 360.0),
-                globals.random.f32_in_range_closed(-360.0, 360.0),
-                self.player,
-            ));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN BOOST
-
-        if input.keyboard.is_down(Scancode::B) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_boost_collectible(
-                pos,
-                vel,
-                globals.random.f32_in_range_closed(0.0, 360.0),
-                globals.random.f32_in_range_closed(-360.0, 360.0),
-            ));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN SKILLPOINTS
-
-        if input.keyboard.is_down(Scancode::S) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_skillpoints_collectible(
-                pos,
-                vel,
-                globals.random.f32_in_range_closed(0.0, 360.0),
-                globals.random.f32_in_range_closed(-360.0, 360.0),
-            ));
-        }
-
-        //------------------------------------------------------------------------------------------
-        // SPAWN HEALTH
-
-        if input.keyboard.is_down(Scancode::H) {
-            let pos_offset = 10.0;
-            let dir = globals.random.pick_from_slice(&[-1.0, 1.0]);
-
-            let pos = Vec2::new(
-                globals.canvas_width / 2.0 + dir * (globals.canvas_width / 2.0 + pos_offset),
-                globals
-                    .random
-                    .f32_in_range_closed(pos_offset, globals.canvas_height - pos_offset),
-            );
-            let vel = Vec2::filled_x(-dir * globals.random.f32_in_range_closed(20.0, 40.0));
-            self.world.spawn(Archetypes::new_hp_collectible(pos, vel));
-        }
-
-        //------------------------------------------------------------------------------------------
         // UPDATE ENEMY
 
         for (entity, (xform, motion, enemy, collider, drawable)) in
@@ -2348,6 +2462,14 @@ impl Scene for SceneStage {
                 if got_hit {
                     enemy.hitflash_timer.restart();
                 }
+            }
+
+            // Remove self when leaving screen
+            if motion.vel.x > 0.0 && xform.pos.x >= globals.canvas_width + 2.0 * enemy.radius {
+                self.commands.remove_entity(entity);
+            }
+            if motion.vel.x < 0.0 && xform.pos.x < -2.0 * enemy.radius {
+                self.commands.remove_entity(entity);
             }
         }
 
@@ -2501,7 +2623,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                     }
                     AttackType::Double => {
@@ -2511,7 +2633,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
@@ -2519,7 +2641,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                     }
                     AttackType::Triple => {
@@ -2529,7 +2651,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
@@ -2537,7 +2659,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute,
@@ -2545,7 +2667,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                     }
                     AttackType::Spread => {
@@ -2557,7 +2679,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             color,
-                            50.0,
+                            100.0,
                         ));
                     }
                     AttackType::Back => {
@@ -2569,7 +2691,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_back,
@@ -2577,7 +2699,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                     }
                     AttackType::Side => {
@@ -2591,7 +2713,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_left,
@@ -2599,7 +2721,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                         self.commands.add_entity(Archetypes::new_projectile(
                             muzzle_pos_absolute_right,
@@ -2607,7 +2729,7 @@ impl Scene for SceneStage {
                             200.0,
                             4.0,
                             player.attack.color,
-                            50.0,
+                            100.0,
                         ));
                     }
                 }
