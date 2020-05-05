@@ -1940,7 +1940,7 @@ impl Director {
         }
     }
 
-    pub fn update(
+    pub fn update_and_spawn_enemies_and_collectibles(
         &mut self,
         random: &mut Random,
         deltatime: f32,
@@ -1956,8 +1956,12 @@ impl Director {
         };
 
         let resource_to_spawn = if self.timer_spawn_resource.update_and_check(deltatime) {
-            let resourcetypes: Vec<ResourceType> = ResourceType::iter().collect();
-            let resourcetype = random.pick_from_slice(&resourcetypes);
+            let mut shufflebag = Shufflebag::new_with_counts(&[
+                (ResourceType::Boost, 28),
+                (ResourceType::Health, 14),
+                (ResourceType::Skillpoint, 58),
+            ]);
+            let resourcetype = shufflebag.get_next(random);
             Some(resourcetype)
         } else {
             None
@@ -2138,8 +2142,9 @@ impl Scene for SceneStage {
 
         draw.debug_log_color(Color::magenta(), dformat!(self.director.difficulty));
 
-        let (enemy_to_spawn, resource_to_spawn, attack_to_spawn) =
-            self.director.update(&mut globals.random, deltatime);
+        let (enemy_to_spawn, resource_to_spawn, attack_to_spawn) = self
+            .director
+            .update_and_spawn_enemies_and_collectibles(&mut globals.random, deltatime);
 
         fn create_spawn_pos_vel(
             random: &mut Random,
