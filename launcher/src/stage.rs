@@ -416,12 +416,6 @@ struct Collectible {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct SlowMotion {
-    pub timer_tween: TimerSimple,
-    pub deltatime_speed_factor: f32,
-}
-
-#[derive(Debug, Copy, Clone)]
 struct TickEffect {
     pub timer_tween: TimerSimple,
     pub width: f32,
@@ -2063,8 +2057,37 @@ impl Director {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Stage Scene
 
+#[derive(Clone)]
+struct SlowmotionModulator {
+    factor: f32,
+    timer: TimerSimple,
+}
+impl SlowmotionModulator {
+    fn new() -> SlowmotionModulator {
+        SlowmotionModulator {
+            factor: 1.0,
+            timer: TimerSimple::new_stopped(1.0),
+        }
+    }
+
+    fn add_slowmotion(&mut self, duration: f32, factor: f32) {
+        self.timer = TimerSimple::new_started(duration);
+        self.factor = factor;
+    }
+
+    #[must_use]
+    fn update_and_get_new_deltatime(&mut self, deltatime: f32) -> f32 {
+        self.timer.update(deltatime);
+        let percentage = self.timer.completion_ratio();
+        let factor = lerp(self.factor, 1.0, percentage);
+        factor * deltatime
+    }
+}
+
 pub struct SceneStage {
     skillpoint_count: usize,
+
+    slowmotion: SlowmotionModulator,
 
     director: Director,
     fonts: HashMap<String, SpriteFont>,
@@ -2096,6 +2119,8 @@ impl SceneStage {
         fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
 
         SceneStage {
+            slowmotion: SlowmotionModulator::new(),
+
             director: Director::new(&mut globals.random),
             skillpoint_count: 0,
             fonts,
@@ -2123,7 +2148,9 @@ impl Scene for SceneStage {
             globals.camera.add_shake(screen_shake);
         }
 
-        let deltatime = globals.deltatime;
+        let deltatime = self
+            .slowmotion
+            .update_and_get_new_deltatime(globals.deltatime);
 
         //------------------------------------------------------------------------------------------
         // RESTART GAME
@@ -2152,20 +2179,6 @@ impl Scene for SceneStage {
                 out_game_events.push(GameEvent::SwitchToScene {
                     scene_name: "stage".to_string(),
                 })
-            }
-        }
-
-        //------------------------------------------------------------------------------------------
-        // UPDATE SLOWMOTION
-
-        for (slowmotion_entity, slowmotion) in &mut self.world.query::<&mut SlowMotion>() {
-            slowmotion.timer_tween.update(deltatime);
-            let percentage = slowmotion.timer_tween.completion_ratio();
-            globals.deltatime_speed_factor =
-                lerp(slowmotion.deltatime_speed_factor, 1.0, percentage);
-
-            if slowmotion.timer_tween.is_finished() {
-                self.commands.remove_entity(slowmotion_entity);
             }
         }
 
@@ -2825,7 +2838,7 @@ impl Scene for SceneStage {
                     screenshake_amplitude,
                     screenshake_duration,
                     screenshake_frequency,
-                    slowmotion_time,
+                    slowmotion_duration,
                     slowmotion_factor,
                     particle_count_min,
                     particle_count_max,
@@ -2850,10 +2863,8 @@ impl Scene for SceneStage {
                 );
                 globals.camera.add_shake(screen_shake);
 
-                self.commands.add_entity((SlowMotion {
-                    timer_tween: TimerSimple::new_started(slowmotion_time),
-                    deltatime_speed_factor: slowmotion_factor,
-                },));
+                self.slowmotion
+                    .add_slowmotion(slowmotion_duration, slowmotion_factor);
 
                 self.commands.add_entity(Archetypes::new_screenflash(
                     globals.canvas_width,
