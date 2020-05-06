@@ -5,9 +5,9 @@ use ct_lib::math::*;
 use ct_lib::random::*;
 use ct_platform;
 
+use console::SceneConsole;
+use skilltree::SceneSkilltree;
 use stage::SceneStage;
-//use console::SceneConsole;
-//use skilltree::SceneSkilltree;
 
 mod main_launcher_info;
 
@@ -37,10 +37,12 @@ pub struct GameState {
     globals: Globals,
     debug_deltatime_factor: f32,
 
+    scene_current: String,
+
     scene_debug: SceneDebug,
     scene_stage: SceneStage,
-    // scene_console: SceneConsole,
-    // scene_skilltree: SceneSkilltree,
+    scene_console: SceneConsole,
+    scene_skilltree: SceneSkilltree,
 }
 
 impl GameStateInterface for GameState {
@@ -95,18 +97,20 @@ impl GameStateInterface for GameState {
 
         let scene_debug = SceneDebug::new(draw, audio, assets, input, "Grand9K_Pixel_bordered");
         let scene_stage = SceneStage::new(draw, audio, assets, input, &mut globals);
-        // let scene_console = SceneConsole::new();
-        // let scene_skilltree = SceneSkilltree::new();
+        let scene_console = SceneConsole::new();
+        let scene_skilltree = SceneSkilltree::new();
 
         GameState {
             globals,
 
             debug_deltatime_factor: 1.0,
 
+            scene_current: "stage".to_string(),
+
             scene_debug,
             scene_stage,
-            // scene_console,
-            // scene_skilltree,
+            scene_console,
+            scene_skilltree,
         }
     }
 
@@ -165,14 +169,67 @@ impl GameStateInterface for GameState {
             &mouse_coords,
         );
 
-        //self.scene_debug
-        //    .update_and_draw(draw, audio, assets, input, &mut self.globals);
-        self.scene_stage
-            .update_and_draw(draw, audio, assets, input, &mut self.globals);
+        let mut game_events = Vec::new();
+        match self.scene_current.as_str() {
+            "stage" => self.scene_stage.update_and_draw(
+                draw,
+                audio,
+                assets,
+                input,
+                &mut self.globals,
+                &mut game_events,
+            ),
+            "console" => self.scene_console.update_and_draw(
+                draw,
+                audio,
+                assets,
+                input,
+                &mut self.globals,
+                &mut game_events,
+            ),
+            "skilltree" => self.scene_skilltree.update_and_draw(
+                draw,
+                audio,
+                assets,
+                input,
+                &mut self.globals,
+                &mut game_events,
+            ),
+            "debug" => self.scene_debug.update_and_draw(
+                draw,
+                audio,
+                assets,
+                input,
+                &mut self.globals,
+                &mut game_events,
+            ),
+            _ => panic!("Unknown scene '{}'", self.scene_current),
+        }
 
         let deltatime = self.globals.deltatime;
         self.globals.camera.update(deltatime);
         draw.set_shaderparams_simple(Color::white(), self.globals.camera.proj_view_matrix());
+
+        for event in game_events {
+            match event {
+                GameEvent::SwitchToScene { scene_name } => {
+                    match scene_name.as_str() {
+                        "stage" => {
+                            self.scene_stage =
+                                SceneStage::new(draw, audio, assets, input, &mut self.globals);
+                        }
+                        "console" => {
+                            self.scene_console = SceneConsole::new();
+                        }
+                        "skilltree" => {
+                            self.scene_skilltree = SceneSkilltree::new();
+                        }
+                        _ => panic!("Unknown scene '{}'", scene_name),
+                    };
+                    self.scene_current = scene_name;
+                }
+            }
+        }
     }
 }
 

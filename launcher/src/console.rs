@@ -9,7 +9,7 @@ use ct_lib::game::*;
 pub struct SceneConsole {}
 
 impl SceneConsole {
-    pub fn _new() -> SceneConsole {
+    pub fn new() -> SceneConsole {
         SceneConsole {}
     }
 }
@@ -21,6 +21,7 @@ impl Scene for SceneConsole {
         _assets: &mut GameAssets,
         _input: &GameInput,
         _globals: &mut Globals,
+        _out_game_events: &mut Vec<GameEvent>,
     ) {
     }
 }

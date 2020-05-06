@@ -9,7 +9,7 @@ use ct_lib::game::*;
 pub struct SceneSkilltree {}
 
 impl SceneSkilltree {
-    pub fn _new() -> SceneSkilltree {
+    pub fn new() -> SceneSkilltree {
         SceneSkilltree {}
     }
 }
@@ -22,6 +22,7 @@ impl Scene for SceneSkilltree {
         _assets: &mut GameAssets,
         _input: &GameInput,
         _globals: &mut Globals,
+        _out_game_events: &mut Vec<GameEvent>,
     ) {
     }
 }

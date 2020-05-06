@@ -23,6 +23,7 @@ const DEPTH_PROJECTILE: Depth = 20.0;
 const DEPTH_EFFECTS: Depth = 30.0;
 const DEPTH_INFOTEXT: Depth = 35.0;
 const DEPTH_SCREENFLASH: Depth = 60.0;
+const DEPTH_GUI: Depth = 70.0;
 
 // TODO: When f32 gets const functions we can just use from_rgb_bytes instead of this monstrosity
 const COLOR_BACKGROUND: Color = Color::from_rgb(16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0);
@@ -2113,6 +2114,7 @@ impl Scene for SceneStage {
         _assets: &mut GameAssets,
         input: &GameInput,
         globals: &mut Globals,
+        out_game_events: &mut Vec<GameEvent>,
     ) {
         draw.set_clear_color_and_depth(COLOR_BACKGROUND, DEPTH_BACKGROUND);
 
@@ -2122,6 +2124,36 @@ impl Scene for SceneStage {
         }
 
         let deltatime = globals.deltatime;
+
+        //------------------------------------------------------------------------------------------
+        // RESTART GAME
+
+        if self.world.get::<Player>(self.player).is_err() {
+            let canvas_center =
+                Rect::from_width_height(globals.canvas_width, globals.canvas_height).center();
+            draw.draw_text(
+                "PRESS ANY KEY TO RESTART",
+                &self.fonts["gui_font"],
+                1.0,
+                canvas_center,
+                Vec2::zero(),
+                Some(TextAlignment {
+                    x: AlignmentHorizontal::Center,
+                    y: AlignmentVertical::Center,
+                    origin_is_baseline: false,
+                    ignore_whitespace: true,
+                }),
+                None,
+                DEPTH_GUI,
+                COLOR_DEFAULT,
+                ADDITIVITY_NONE,
+            );
+            if input.keyboard.has_press_event {
+                out_game_events.push(GameEvent::SwitchToScene {
+                    scene_name: "stage".to_string(),
+                })
+            }
+        }
 
         //------------------------------------------------------------------------------------------
         // UPDATE SLOWMOTION
