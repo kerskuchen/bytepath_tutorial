@@ -23,7 +23,7 @@ const DEPTH_PROJECTILE: Depth = 20.0;
 const DEPTH_EFFECTS: Depth = 30.0;
 const DEPTH_INFOTEXT: Depth = 35.0;
 const DEPTH_SCREENFLASH: Depth = 60.0;
-const DEPTH_GUI: Depth = 70.0;
+const DEPTH_GUI: Depth = 55.0;
 
 // TODO: When f32 gets const functions we can just use from_rgb_bytes instead of this monstrosity
 const COLOR_BACKGROUND: Color = Color::from_rgb(16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0);
@@ -83,6 +83,10 @@ const COLLISION_LAYER_PLAYER: u64 = 1 << 1;
 const COLLISION_LAYER_ENEMY_PROJECTILE: u64 = 1 << 2;
 const COLLISION_LAYER_PLAYER_PROJECTILE: u64 = 1 << 3;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 4;
+
+const PLAYER_MAX_HP: f32 = 100.0;
+const PLAYER_MAX_BOOST: f32 = 100.0;
+const PLAYER_MAX_AMMO: f32 = 100.0;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
 pub enum AttackType {
@@ -386,6 +390,7 @@ struct Enemy {
     is_charging: bool,
     timer_shoot: TimerSimple,
     timer_charge: TriggerRepeating,
+    score: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -544,16 +549,7 @@ fn draw_drawable(
                     .translated_by(pivot)
             };
 
-            if *filled {
-                draw.draw_rect(rect, depth, color, additivity);
-            } else {
-                draw.draw_linestrip_bresenham(
-                    &rect.linestrip(),
-                    DEPTH_COLLECTIBLES,
-                    COLOR_AMMO,
-                    ADDITIVITY_NONE,
-                );
-            }
+            draw.draw_rect(rect, *filled, depth, color, additivity);
         }
         MeshType::RectangleTransformed {
             width,
@@ -866,16 +862,16 @@ impl Archetypes {
                 height: player_size,
                 reload_timer: TriggerRepeating::new(attack.reload_time),
 
-                hp: 100.0,
-                hp_max: 100.0,
+                hp: PLAYER_MAX_HP,
+                hp_max: PLAYER_MAX_HP,
 
                 invincible_timer: TimerSimple::new_stopped(2.0),
 
-                ammo: 100.0,
+                ammo: PLAYER_MAX_AMMO,
 
-                ammo_max: 100.0,
-                boost: 100.0,
-                boost_max: 100.0,
+                ammo_max: PLAYER_MAX_AMMO,
+                boost: PLAYER_MAX_BOOST,
+                boost_max: PLAYER_MAX_BOOST,
                 boost_allowed: true,
                 boost_cooldown_time: 2.0,
 
@@ -1714,6 +1710,7 @@ impl Archetypes {
                 is_charging: false,
                 timer_shoot: TimerSimple::new_stopped(1.0),
                 timer_charge: TriggerRepeating::new(1.0),
+                score: 100,
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -1764,6 +1761,7 @@ impl Archetypes {
                 is_charging: false,
                 timer_shoot: TimerSimple::new_started(5.0),
                 timer_charge: TriggerRepeating::new_with_distinct_triggertimes(4.0, 0.02),
+                score: 150,
             },
             Drawable {
                 mesh: MeshType::Linestrip(linestrip),
@@ -2085,6 +2083,7 @@ impl SlowmotionModulator {
 }
 
 pub struct SceneStage {
+    score: usize,
     skillpoint_count: usize,
 
     slowmotion: SlowmotionModulator,
@@ -2119,6 +2118,7 @@ impl SceneStage {
         fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
 
         SceneStage {
+            score: 0,
             slowmotion: SlowmotionModulator::new(),
 
             director: Director::new(&mut globals.random),
@@ -2153,6 +2153,174 @@ impl Scene for SceneStage {
             .update_and_get_new_deltatime(globals.deltatime);
 
         //------------------------------------------------------------------------------------------
+        // UI
+
+        // Score
+        draw.draw_text(
+            &self.score.to_string(),
+            &self.fonts["gui_font"],
+            1.0,
+            Vec2::new(globals.canvas_width - 20.0, 10.0),
+            Vec2::zero(),
+            Some(TextAlignment {
+                x: AlignmentHorizontal::Right,
+                y: AlignmentVertical::Top,
+                origin_is_baseline: false,
+                ignore_whitespace: false,
+            }),
+            None,
+            DEPTH_GUI,
+            COLOR_DEFAULT,
+            ADDITIVITY_NONE,
+        );
+
+        let (player_hp, player_boost, player_ammo) =
+            if let Some(player) = self.world.get::<Player>(self.player).ok() {
+                (player.hp, player.boost, player.ammo)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+
+        let cycle_percentage = self.director.timer_round.completion_ratio();
+
+        fn draw_bar(
+            draw: &mut Drawstate,
+            font: &SpriteFont,
+            text_title: &str,
+            text_value: &str,
+            bar_color: Color,
+            bar_center: Vec2,
+            bar_width: f32,
+            bar_height: f32,
+            bar_filled_percentage: f32,
+            swap_title_and_value_text_pos: bool,
+        ) {
+            let bar_left_top = bar_center - Vec2::new(bar_width, bar_height) / 2.0;
+            draw.draw_rect(
+                Rect::from_pos_width_height(
+                    bar_left_top,
+                    bar_width * bar_filled_percentage,
+                    bar_height,
+                ),
+                true,
+                DEPTH_GUI,
+                bar_color,
+                ADDITIVITY_NONE,
+            );
+            draw.draw_rect(
+                Rect::from_pos_width_height(bar_left_top, bar_width, bar_height),
+                false,
+                DEPTH_GUI,
+                Color::new(
+                    bar_color.r - (32.0 / 255.0),
+                    bar_color.g - (32.0 / 255.0),
+                    bar_color.b - (32.0 / 255.0),
+                    1.0,
+                ),
+                ADDITIVITY_NONE,
+            );
+
+            let mut pos_title = bar_center - Vec2::filled_y(8.0);
+            let mut pos_value = bar_center + Vec2::filled_y(8.0);
+            if swap_title_and_value_text_pos {
+                std::mem::swap(&mut pos_title, &mut pos_value);
+            }
+
+            draw.draw_text(
+                text_title,
+                font,
+                1.0,
+                pos_title,
+                Vec2::zero(),
+                Some(TextAlignment {
+                    x: AlignmentHorizontal::Center,
+                    y: AlignmentVertical::Center,
+                    origin_is_baseline: false,
+                    ignore_whitespace: true,
+                }),
+                None,
+                DEPTH_GUI,
+                bar_color,
+                ADDITIVITY_NONE,
+            );
+            draw.draw_text(
+                text_value,
+                font,
+                1.0,
+                pos_value,
+                Vec2::zero(),
+                Some(TextAlignment {
+                    x: AlignmentHorizontal::Center,
+                    y: AlignmentVertical::Center,
+                    origin_is_baseline: false,
+                    ignore_whitespace: true,
+                }),
+                None,
+                DEPTH_GUI,
+                bar_color,
+                ADDITIVITY_NONE,
+            );
+        }
+
+        let bar_width = 48.0;
+        let bar_height = 4.0;
+
+        draw_bar(
+            draw,
+            &self.fonts["gui_font"],
+            "AMMO",
+            &format!("{}/{}", roundi(player_ammo), roundi(PLAYER_MAX_AMMO)),
+            COLOR_AMMO,
+            Vec2::new(globals.canvas_width / 2.0 - (bar_width + 2.0), 16.0),
+            bar_width,
+            bar_height,
+            player_ammo / PLAYER_MAX_AMMO,
+            true,
+        );
+        draw_bar(
+            draw,
+            &self.fonts["gui_font"],
+            "BOOST",
+            &format!("{}/{}", roundi(player_boost), roundi(PLAYER_MAX_BOOST)),
+            COLOR_BOOST,
+            Vec2::new(globals.canvas_width / 2.0 + (bar_width + 2.0), 16.0),
+            bar_width,
+            bar_height,
+            player_boost / PLAYER_MAX_BOOST,
+            true,
+        );
+        draw_bar(
+            draw,
+            &self.fonts["gui_font"],
+            "HP",
+            &format!("{}/{}", roundi(player_hp), roundi(PLAYER_MAX_HP)),
+            COLOR_HP,
+            Vec2::new(
+                globals.canvas_width / 2.0 - (bar_width + 2.0),
+                globals.canvas_height - 16.0,
+            ),
+            bar_width,
+            bar_height,
+            player_hp / PLAYER_MAX_HP,
+            false,
+        );
+        draw_bar(
+            draw,
+            &self.fonts["gui_font"],
+            "CYCLE",
+            &self.director.difficulty.to_string(),
+            COLOR_DEFAULT,
+            Vec2::new(
+                globals.canvas_width / 2.0 + (bar_width + 2.0),
+                globals.canvas_height - 16.0,
+            ),
+            bar_width,
+            bar_height,
+            cycle_percentage,
+            false,
+        );
+
+        //------------------------------------------------------------------------------------------
         // RESTART GAME
 
         if self.world.get::<Player>(self.player).is_err() {
@@ -2184,8 +2352,6 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE DIRECTOR
-
-        draw.debug_log_color(Color::magenta(), dformat!(self.director.difficulty));
 
         let (enemy_to_spawn, resource_to_spawn, attack_to_spawn) = self
             .director
@@ -2487,6 +2653,8 @@ impl Scene for SceneStage {
             }
 
             if enemy.hp == 0.0 {
+                self.score += enemy.score;
+
                 self.commands.remove_entity(entity);
 
                 self.commands.add_entity(Archetypes::new_ammo_collectible(
@@ -2535,10 +2703,6 @@ impl Scene for SceneStage {
                 &mut Drawable,
             )>()
         {
-            draw.debug_log_color(COLOR_AMMO, dformat!(player.ammo));
-            draw.debug_log_color(COLOR_HP, dformat!(player.hp));
-            draw.debug_log_color(COLOR_BOOST, dformat!(player.boost));
-
             player.invincible_timer.update(deltatime);
             if player.invincible_timer.is_running() {
                 drawable.visible = floori(player.invincible_timer.time_cur / 0.04) % 2 != 0;
@@ -2556,6 +2720,7 @@ impl Scene for SceneStage {
                 if let Some(collectible) = self.world.get::<Collectible>(collision_entity).ok() {
                     match collectible.collectible {
                         CollectibleType::Boost(amount) => {
+                            self.score += 150;
                             player.boost = clampf(player.boost + amount, 0.0, player.boost_max);
                             if player.boost > player.boost_max / 2.0 {
                                 player.boost_allowed = true;
@@ -2563,15 +2728,19 @@ impl Scene for SceneStage {
                             }
                         }
                         CollectibleType::Ammo(amount) => {
+                            self.score += 50;
                             player.ammo = clampf(player.ammo + amount, 0.0, player.ammo_max);
                         }
                         CollectibleType::Hp(amount) => {
+                            self.score += 100;
                             player.hp = clampf(player.hp + amount, 0.0, player.hp_max);
                         }
                         CollectibleType::Skillpoints(amount) => {
+                            self.score += 250;
                             self.skillpoint_count += amount;
                         }
                         CollectibleType::Attack(attacktype) => {
+                            self.score += 500;
                             player.ammo = player.ammo_max;
                             player.attack = ATTACKS[&attacktype];
                             player.reload_timer = TriggerRepeating::new(player.attack.reload_time);
