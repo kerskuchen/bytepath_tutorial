@@ -731,34 +731,18 @@ fn draw_drawable(
                 todo!();
             }
 
-            let center_offset = if *centered {
-                Vec2::new(*width, *height) / 2.0
-            } else {
-                Vec2::zero()
-            };
-
-            if *filled {
-                draw.draw_rect_transformed(
-                    Vec2::new(*width, *height),
-                    pivot + center_offset,
-                    pos,
-                    scale,
-                    dir,
-                    depth,
-                    color,
-                    additivity,
-                );
-            } else {
-                let rect = if *centered {
-                    Rect::from_width_height(*width, *height).centered()
-                } else {
-                    Rect::from_pos_width_height(pos, *width, *height)
-                };
-
-                let linestrip: Vec<Vec2> =
-                    linestrip_transform(&rect.linestrip(), pos, pivot, scale, dir, None);
-                draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
-            }
+            draw.draw_rect_transformed(
+                Vec2::new(*width, *height),
+                *filled,
+                *centered,
+                pivot,
+                pos,
+                scale,
+                dir,
+                depth,
+                color,
+                additivity,
+            );
         }
         MeshType::Linestrips(linestrips) => {
             for linestrip_raw in linestrips {
@@ -3818,6 +3802,8 @@ impl Scene for SceneStage {
 
             draw.draw_rect_transformed(
                 Vec2::new(size, size),
+                true,
+                true,
                 Vec2::new(size, size) / 2.0,
                 pos,
                 Vec2::ones(),
