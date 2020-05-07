@@ -104,6 +104,7 @@ pub enum AttackType {
     Spread,
     Back,
     Side,
+    Homing,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -194,6 +195,17 @@ lazy_static! {
                 reload_time: 0.32,
                 ammo_consumption_on_shot: 3.0,
                 color: COLOR_BOOST,
+            },
+        );
+        attacks.insert(
+            AttackType::Homing,
+            Attack {
+                typename: AttackType::Homing,
+                name: "Homing",
+                name_abbreviation: "H",
+                reload_time: 0.56,
+                ammo_consumption_on_shot: 4.0,
+                color: COLOR_SKILL_POINT,
             },
         );
 
@@ -481,7 +493,7 @@ impl Player {
             )
         };
 
-        let attack = ATTACKS[&AttackType::Neutral];
+        let attack = ATTACKS[&AttackType::Homing];
         Player {
             attack,
             timer_trail_particles: TriggerRepeating::new(0.01),
@@ -570,9 +582,26 @@ struct TickEffect {
 
 #[derive(Debug, Copy, Clone)]
 struct Projectile {
-    pub length: f32,
+    pub size: f32,
     pub color: Color,
     pub damage: f32,
+
+    pub timer_trail_particles: TriggerRepeating,
+}
+impl Projectile {
+    fn new(size: f32, color: Color, damage: f32, has_trail: bool) -> Projectile {
+        Projectile {
+            size,
+            color,
+            damage,
+
+            timer_trail_particles: if has_trail {
+                TriggerRepeating::new(0.01)
+            } else {
+                TriggerRepeating::new(std::f32::MAX)
+            },
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1122,11 +1151,7 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Projectile {
-                length,
-                color,
-                damage,
-            },
+            Projectile::new(length, color, damage, false),
             Collider {
                 radius: length,
                 layers_own: COLLISION_LAYER_PLAYER_PROJECTILE,
@@ -1172,6 +1197,65 @@ impl Archetypes {
         )
     }
 
+    fn new_projectile_homing(
+        pos: Vec2,
+        dir: Vec2,
+        speed: f32,
+        size: f32,
+        color: Color,
+        damage: f32,
+    ) -> (
+        Transform,
+        Motion,
+        MoveTowardsTarget,
+        Projectile,
+        Collider,
+        DrawableMulti,
+    ) {
+        (
+            Transform {
+                pos,
+                dir_angle: rad_to_deg(dir.to_angle_flipped_y()),
+            },
+            Motion {
+                vel: speed * dir,
+                acc: Vec2::zero(),
+                dir_angle_vel: 0.0,
+                dir_angle_acc: 0.0,
+            },
+            MoveTowardsTarget {
+                target: Entity::from_bits(std::u64::MAX),
+                follow_precision_percent: 0.1,
+            },
+            Projectile::new(size, color, damage, true),
+            Collider {
+                radius: size,
+                layers_own: COLLISION_LAYER_PLAYER_PROJECTILE,
+                layers_affects: COLLISION_LAYER_ENEMY | COLLISION_LAYER_ENEMY_PROJECTILE,
+                collisions: Vec::with_capacity(32),
+            },
+            DrawableMulti {
+                drawables: vec![Drawable {
+                    mesh: MeshType::RectangleTransformed {
+                        width: 1.2 * size,
+                        height: 1.2 * size,
+
+                        filled: true,
+                        centered: true,
+                    },
+                    pos_offset: Vec2::zero(),
+                    dir_angle_offset: 45.0,
+                    scale: Vec2::ones(),
+                    add_jitter: false,
+                    depth: DEPTH_PROJECTILE,
+                    color,
+                    additivity: ADDITIVITY_NONE,
+                    visible: true,
+                }],
+            },
+        )
+    }
+
     fn new_enemy_projectile(
         pos: Vec2,
         dir: Vec2,
@@ -1190,11 +1274,7 @@ impl Archetypes {
                 dir_angle_vel: 0.0,
                 dir_angle_acc: 0.0,
             },
-            Projectile {
-                length,
-                color: COLOR_HP,
-                damage,
-            },
+            Projectile::new(length, COLOR_HP, damage, false),
             Collider {
                 radius: length,
                 layers_own: COLLISION_LAYER_ENEMY_PROJECTILE,
@@ -3121,6 +3201,16 @@ impl Scene for SceneStage {
                             100.0,
                         ));
                     }
+                    AttackType::Homing => {
+                        self.commands.add_entity(Archetypes::new_projectile_homing(
+                            muzzle_pos_absolute,
+                            player_dir,
+                            200.0,
+                            4.0,
+                            player.attack.color,
+                            100.0,
+                        ));
+                    }
                 }
 
                 if player.ammo <= 0.0 {
@@ -3276,9 +3366,54 @@ impl Scene for SceneStage {
         //------------------------------------------------------------------------------------------
         // UPDATE PROJECTILES
 
-        for (entity, (xform, _projectile, collider)) in
-            &mut self.world.query::<(&Transform, &Projectile, &Collider)>()
+        for (entity, (xform, motion, projectile, collider)) in
+            &mut self
+                .world
+                .query::<(&mut Transform, &Motion, &mut Projectile, &Collider)>()
         {
+            // Face towards movement direction
+            xform.dir_angle = rad_to_deg(motion.vel.to_angle_flipped_y());
+
+            // Homing projectiles
+            if let Some(mut homing_component) = self.world.get_mut::<MoveTowardsTarget>(entity).ok()
+            {
+                if self
+                    .world
+                    .get::<Enemy>(homing_component.target)
+                    .ok()
+                    .is_none()
+                {
+                    // Our target does not exist (anymore) so we get a new one
+
+                    let mut min_distance_squared = squared(400.0);
+                    let mut min_distance_entity = Entity::from_bits(std::u64::MAX);
+
+                    for (enemy_entity, enemy_xform) in
+                        &mut self.world.query::<&Transform>().with::<Enemy>()
+                    {
+                        let distance = Vec2::distance_squared(xform.pos, enemy_xform.pos);
+                        if Vec2::distance_squared(xform.pos, enemy_xform.pos) < min_distance_squared
+                        {
+                            min_distance_squared = distance;
+                            min_distance_entity = enemy_entity;
+                        }
+                    }
+
+                    homing_component.target = min_distance_entity;
+                }
+            }
+
+            // Trail
+            if projectile.timer_trail_particles.update_and_check(deltatime) {
+                let size = globals.random.f32_in_range_closed(1.0, 3.0);
+                let lifetime = globals.random.f32_in_range_closed(0.05, 0.15);
+                let color = projectile.color;
+                self.commands.add_entity(Archetypes::new_trailparticle(
+                    xform.pos, size, lifetime, color,
+                ));
+            }
+
+            // Remove
             let mut explode = false;
             if !collider.collisions.is_empty() {
                 explode = true;
@@ -3287,7 +3422,6 @@ impl Scene for SceneStage {
             if !canvas_rect.contains_point(xform.pos) {
                 explode = true;
             }
-
             if explode {
                 self.commands.remove_entity(entity);
 
