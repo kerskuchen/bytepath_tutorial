@@ -88,6 +88,9 @@ const PLAYER_MAX_HP: f32 = 100.0;
 const PLAYER_MAX_BOOST: f32 = 100.0;
 const PLAYER_MAX_AMMO: f32 = 100.0;
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Attacks
+
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
 pub enum AttackType {
     Neutral,
@@ -97,13 +100,6 @@ pub enum AttackType {
     Spread,
     Back,
     Side,
-}
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
-pub enum ResourceType {
-    Boost,
-    Skillpoint,
-    Health,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1903,6 +1899,13 @@ fn get_exhaust_points_for_ship(ship_type: ShipType) -> Vec<(i32, i32)> {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Director
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, EnumIter)]
+pub enum ResourceType {
+    Boost,
+    Skillpoint,
+    Health,
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum EnemyType {
