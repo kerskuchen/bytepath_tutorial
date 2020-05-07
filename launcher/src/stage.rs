@@ -84,9 +84,13 @@ const COLLISION_LAYER_ENEMY_PROJECTILE: u64 = 1 << 2;
 const COLLISION_LAYER_PLAYER_PROJECTILE: u64 = 1 << 3;
 const COLLISION_LAYER_COLLECTIBLES: u64 = 1 << 4;
 
-const PLAYER_MAX_HP: f32 = 100.0;
-const PLAYER_MAX_BOOST: f32 = 100.0;
-const PLAYER_MAX_AMMO: f32 = 100.0;
+const PLAYER_BASE_HP: f32 = 100.0;
+const PLAYER_BASE_BOOST: f32 = 100.0;
+const PLAYER_BASE_AMMO: f32 = 100.0;
+
+const PLAYER_BASE_GAIN_HP: f32 = 25.0;
+const PLAYER_BASE_GAIN_AMMO: f32 = 5.0;
+const PLAYER_BASE_GAIN_BOOST: f32 = 25.0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Attacks
@@ -342,6 +346,48 @@ impl AutoremoveTimerFrames {
 // Primary Components
 
 #[derive(Debug, Copy, Clone)]
+pub enum Skill {
+    AddPercentageHP(i32),
+    AddPercentageAmmo(i32),
+    AddPercentageBoost(i32),
+    AddHp(i32),
+    AddAmmo(i32),
+    AddBoost(i32),
+    AddHpGain(i32),
+    AddAmmoGain(i32),
+    AddBoostGain(i32),
+}
+
+impl Skill {
+    pub fn name(&self) -> String {
+        match self {
+            Skill::AddPercentageHP(_) => "HP".to_string(),
+            Skill::AddPercentageAmmo(_) => "Ammo".to_string(),
+            Skill::AddPercentageBoost(_) => "Boost".to_string(),
+            Skill::AddHp(_) => "Flat HP".to_string(),
+            Skill::AddAmmo(_) => "Flat Ammo".to_string(),
+            Skill::AddBoost(_) => "Flat Boost".to_string(),
+            Skill::AddHpGain(_) => "HP Gain".to_string(),
+            Skill::AddAmmoGain(_) => "Ammo Gain".to_string(),
+            Skill::AddBoostGain(_) => "Boost Gain".to_string(),
+        }
+    }
+    pub fn description(&self) -> String {
+        match self {
+            Skill::AddPercentageHP(value) => format!("+{}% HP", value),
+            Skill::AddPercentageAmmo(value) => format!("+{}% Ammo", value),
+            Skill::AddPercentageBoost(value) => format!("+{}% Boost", value),
+            Skill::AddHp(value) => format!("+{} HP", value),
+            Skill::AddAmmo(value) => format!("+{} Ammo", value),
+            Skill::AddBoost(value) => format!("+{} Boost", value),
+            Skill::AddHpGain(value) => format!("+{} HP Gain", value),
+            Skill::AddAmmoGain(value) => format!("+{} Ammo Gain", value),
+            Skill::AddBoostGain(value) => format!("+{} Boost Gain", value),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 struct Player {
     pub attack: Attack,
     pub timer_trail_particles: TriggerRepeating,
@@ -355,27 +401,124 @@ struct Player {
 
     pub turn_speed: f32,
 
-    pub width: f32,
-    pub height: f32,
+    pub size: f32,
 
     pub reload_timer: TriggerRepeating,
 
     pub hp: f32,
     pub hp_max: f32,
+    pub hp_gain: f32,
 
     pub invincible_timer: TimerSimple,
 
     pub ammo: f32,
     pub ammo_max: f32,
+    pub ammo_gain: f32,
 
     pub boost: f32,
     pub boost_max: f32,
+    pub boost_gain: f32,
+
     pub boost_allowed: bool,
     pub boost_cooldown_time: f32,
     pub boost_cooldown_timer: TimerSimple,
 
     pub cycle_cooldown: f32,
     pub cycle_timer: TimerSimple,
+}
+
+impl Player {
+    fn new(size: f32, ship_type: ShipType, skills: &[Skill]) -> Player {
+        let (hp, hp_gain, ammo, ammo_gain, boost, boost_gain) = {
+            let mut gain_hp = PLAYER_BASE_GAIN_HP;
+            let mut gain_ammo = PLAYER_BASE_GAIN_AMMO;
+            let mut gain_boost = PLAYER_BASE_GAIN_BOOST;
+            let mut flat_hp = PLAYER_BASE_HP;
+            let mut flat_ammo = PLAYER_BASE_AMMO;
+            let mut flat_boost = PLAYER_BASE_BOOST;
+            let mut multiplier_hp = 1.0;
+            let mut multiplier_ammo = 1.0;
+            let mut multiplier_boost = 1.0;
+            for skill in skills {
+                match skill {
+                    Skill::AddPercentageHP(value) => {
+                        multiplier_hp += (*value as f32) / 100.0;
+                    }
+                    Skill::AddPercentageAmmo(value) => {
+                        multiplier_ammo += (*value as f32) / 100.0;
+                    }
+                    Skill::AddPercentageBoost(value) => {
+                        multiplier_boost += (*value as f32) / 100.0;
+                    }
+                    Skill::AddHp(value) => {
+                        flat_hp += *value as f32;
+                    }
+                    Skill::AddAmmo(value) => {
+                        flat_ammo += *value as f32;
+                    }
+                    Skill::AddBoost(value) => {
+                        flat_boost += *value as f32;
+                    }
+                    Skill::AddHpGain(value) => {
+                        gain_hp += *value as f32;
+                    }
+                    Skill::AddAmmoGain(value) => {
+                        gain_ammo += *value as f32;
+                    }
+                    Skill::AddBoostGain(value) => {
+                        gain_boost += *value as f32;
+                    }
+                }
+            }
+
+            (
+                flat_hp * multiplier_hp,
+                gain_hp,
+                flat_ammo * multiplier_ammo,
+                gain_ammo,
+                flat_boost * multiplier_boost,
+                gain_boost,
+            )
+        };
+
+        let attack = ATTACKS[&AttackType::Neutral];
+        Player {
+            attack,
+            timer_trail_particles: TriggerRepeating::new(0.01),
+            ship_type,
+            speed: 0.0,
+
+            speed_max: 100.0,
+
+            speed_base_max: 100.0,
+            acc: 100.0,
+            turn_speed: 1.66 * 180.0,
+
+            size,
+
+            reload_timer: TriggerRepeating::new(attack.reload_time),
+
+            hp,
+            hp_max: hp,
+            hp_gain,
+
+            invincible_timer: TimerSimple::new_stopped(2.0),
+
+            ammo,
+            ammo_max: ammo,
+            ammo_gain,
+
+            boost,
+            boost_max: boost,
+            boost_gain,
+
+            boost_allowed: true,
+            boost_cooldown_time: 2.0,
+            boost_cooldown_timer: TimerSimple::new_stopped(1.0),
+            cycle_cooldown: 5.0,
+            cycle_timer: TimerSimple::new_started(5.0),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -393,19 +536,19 @@ struct Enemy {
 
 #[derive(Debug, Copy, Clone)]
 enum CollectibleType {
-    Boost(f32),
-    Ammo(f32),
-    Hp(f32),
-    Skillpoints(usize),
+    Boost,
+    Ammo,
+    Hp,
+    Skillpoint,
     Attack(AttackType),
 }
 impl CollectibleType {
     fn get_infotext_string(&self) -> &'static str {
         match self {
-            CollectibleType::Boost(_) => "+BOOST",
-            CollectibleType::Ammo(_) => "+AMMO",
-            CollectibleType::Hp(_) => "+HP",
-            CollectibleType::Skillpoints(_) => "+1 SP",
+            CollectibleType::Boost => "+BOOST",
+            CollectibleType::Ammo => "+AMMO",
+            CollectibleType::Hp => "+HP",
+            CollectibleType::Skillpoint => "+1 SP",
             CollectibleType::Attack(attacktype) => ATTACKS[attacktype].name,
         }
     }
@@ -817,9 +960,9 @@ impl Archetypes {
     fn new_player(
         pos: Vec2,
         ship_type: ShipType,
+        skills: &[Skill],
     ) -> (Transform, Motion, Drawable, Player, Collider) {
         let player_size = 12.0;
-        let attack = ATTACKS[&AttackType::Neutral];
         (
             Transform {
                 pos,
@@ -842,40 +985,7 @@ impl Archetypes {
                 add_jitter: true,
                 visible: true,
             },
-            Player {
-                attack: attack,
-                timer_trail_particles: TriggerRepeating::new(0.01),
-                ship_type,
-                speed: 0.0,
-
-                speed_max: 100.0,
-
-                speed_base_max: 100.0,
-                acc: 100.0,
-                turn_speed: 1.66 * 180.0,
-                width: player_size,
-
-                height: player_size,
-
-                reload_timer: TriggerRepeating::new(attack.reload_time),
-                hp: PLAYER_MAX_HP,
-
-                hp_max: PLAYER_MAX_HP,
-                invincible_timer: TimerSimple::new_stopped(2.0),
-
-                ammo: PLAYER_MAX_AMMO,
-
-                ammo_max: PLAYER_MAX_AMMO,
-
-                boost: PLAYER_MAX_BOOST,
-                boost_max: PLAYER_MAX_BOOST,
-                boost_allowed: true,
-                boost_cooldown_time: 2.0,
-                boost_cooldown_timer: TimerSimple::new_stopped(1.0),
-
-                cycle_timer: TimerSimple::new_started(5.0),
-                cycle_cooldown: 5.0,
-            },
+            Player::new(player_size, ship_type, skills),
             Collider {
                 radius: player_size,
                 layers_own: COLLISION_LAYER_PLAYER,
@@ -1136,7 +1246,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Collectible {
-                collectible: CollectibleType::Ammo(5.0),
+                collectible: CollectibleType::Ammo,
                 color: COLOR_AMMO,
                 size,
             },
@@ -1185,7 +1295,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Collectible {
-                collectible: CollectibleType::Skillpoints(1),
+                collectible: CollectibleType::Skillpoint,
                 color: COLOR_SKILL_POINT,
                 size,
             },
@@ -1250,7 +1360,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Collectible {
-                collectible: CollectibleType::Boost(25.0),
+                collectible: CollectibleType::Boost,
                 color: COLOR_BOOST,
                 size,
             },
@@ -1411,7 +1521,7 @@ impl Archetypes {
                 dir_angle_acc: 0.0,
             },
             Collectible {
-                collectible: CollectibleType::Hp(25.0),
+                collectible: CollectibleType::Hp,
                 color: COLOR_HP,
                 size,
             },
@@ -2117,8 +2227,13 @@ impl SceneStage {
     ) -> SceneStage {
         let mut world = World::new();
 
+        let skills = vec![Skill::AddHp(15), Skill::AddPercentageBoost(50)];
         let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
-        let player = world.spawn(Archetypes::new_player(player_pos, ShipType::Sorcerer));
+        let player = world.spawn(Archetypes::new_player(
+            player_pos,
+            ShipType::Sorcerer,
+            &skills,
+        ));
 
         let mut fonts = HashMap::new();
         fonts.insert("gui_font".to_owned(), draw.get_font("default_tiny").clone());
@@ -2159,7 +2274,7 @@ impl Scene for SceneStage {
             .update_and_get_new_deltatime(globals.deltatime);
 
         //------------------------------------------------------------------------------------------
-        // UI
+        // DRAW GUI
 
         // Score
         draw.draw_text(
@@ -2199,18 +2314,7 @@ impl Scene for SceneStage {
             ADDITIVITY_NONE,
         );
 
-        let (player_hp, player_boost, player_ammo, player_cycle_percentage) =
-            if let Some(player) = self.world.get::<Player>(self.player).ok() {
-                (
-                    player.hp,
-                    player.boost,
-                    player.ammo,
-                    player.cycle_timer.completion_ratio(),
-                )
-            } else {
-                (0.0, 0.0, 0.0, 0.0)
-            };
-
+        // Bars
         fn draw_bar(
             draw: &mut Drawstate,
             font: &SpriteFont,
@@ -2290,6 +2394,28 @@ impl Scene for SceneStage {
             );
         }
 
+        let (
+            player_hp,
+            player_hp_max,
+            player_boost,
+            player_boost_max,
+            player_ammo,
+            player_ammo_max,
+            player_cycle_percentage,
+        ) = if let Some(player) = self.world.get::<Player>(self.player).ok() {
+            (
+                player.hp,
+                player.hp_max,
+                player.boost,
+                player.boost_max,
+                player.ammo,
+                player.ammo_max,
+                player.cycle_timer.completion_ratio(),
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        };
+
         let bar_width = 48.0;
         let bar_height = 4.0;
 
@@ -2297,31 +2423,31 @@ impl Scene for SceneStage {
             draw,
             &self.fonts["gui_font"],
             "AMMO",
-            &format!("{}/{}", roundi(player_ammo), roundi(PLAYER_MAX_AMMO)),
+            &format!("{}/{}", roundi(player_ammo), roundi(player_ammo_max)),
             COLOR_AMMO,
             Vec2::new(globals.canvas_width / 2.0 - (bar_width / 2.0 + 4.0), 16.0),
             bar_width,
             bar_height,
-            player_ammo / PLAYER_MAX_AMMO,
+            player_ammo / player_ammo_max,
             true,
         );
         draw_bar(
             draw,
             &self.fonts["gui_font"],
             "BOOST",
-            &format!("{}/{}", roundi(player_boost), roundi(PLAYER_MAX_BOOST)),
+            &format!("{}/{}", roundi(player_boost), roundi(player_boost_max)),
             COLOR_BOOST,
             Vec2::new(globals.canvas_width / 2.0 + (bar_width / 2.0 + 4.0), 16.0),
             bar_width,
             bar_height,
-            player_boost / PLAYER_MAX_BOOST,
+            player_boost / player_boost_max,
             true,
         );
         draw_bar(
             draw,
             &self.fonts["gui_font"],
             "HP",
-            &format!("{}/{}", roundi(player_hp), roundi(PLAYER_MAX_HP)),
+            &format!("{}/{}", roundi(player_hp), roundi(player_hp_max)),
             COLOR_HP,
             Vec2::new(
                 globals.canvas_width / 2.0 - (bar_width / 2.0 + 4.0),
@@ -2329,14 +2455,14 @@ impl Scene for SceneStage {
             ),
             bar_width,
             bar_height,
-            player_hp / PLAYER_MAX_HP,
+            player_hp / player_hp_max,
             false,
         );
         draw_bar(
             draw,
             &self.fonts["gui_font"],
             "CYCLE",
-            &self.director.difficulty.to_string(),
+            "",
             COLOR_DEFAULT,
             Vec2::new(
                 globals.canvas_width / 2.0 + (bar_width / 2.0 + 4.0),
@@ -2761,25 +2887,27 @@ impl Scene for SceneStage {
             for &collision_entity in &collider.collisions {
                 if let Some(collectible) = self.world.get::<Collectible>(collision_entity).ok() {
                     match collectible.collectible {
-                        CollectibleType::Boost(amount) => {
+                        CollectibleType::Boost => {
                             self.score += 150;
-                            player.boost = clampf(player.boost + amount, 0.0, player.boost_max);
+                            player.boost =
+                                clampf(player.boost + player.boost_gain, 0.0, player.boost_max);
                             if player.boost > player.boost_max / 2.0 {
                                 player.boost_allowed = true;
                                 player.boost_cooldown_timer.stop();
                             }
                         }
-                        CollectibleType::Ammo(amount) => {
+                        CollectibleType::Ammo => {
                             self.score += 50;
-                            player.ammo = clampf(player.ammo + amount, 0.0, player.ammo_max);
+                            player.ammo =
+                                clampf(player.ammo + player.ammo_gain, 0.0, player.ammo_max);
                         }
-                        CollectibleType::Hp(amount) => {
+                        CollectibleType::Hp => {
                             self.score += 100;
-                            player.hp = clampf(player.hp + amount, 0.0, player.hp_max);
+                            player.hp = clampf(player.hp + player.hp_gain, 0.0, player.hp_max);
                         }
-                        CollectibleType::Skillpoints(amount) => {
+                        CollectibleType::Skillpoint => {
                             self.score += 250;
-                            self.skillpoint_count += amount;
+                            self.skillpoint_count += 1;
                         }
                         CollectibleType::Attack(attacktype) => {
                             self.score += 500;
@@ -2843,7 +2971,7 @@ impl Scene for SceneStage {
             player_motion.vel = player_speed * player_dir;
 
             let player_pos = player_xform.pos;
-            let player_scale = Vec2::filled(player.width) / 4.0;
+            let player_scale = Vec2::filled(player.size) / 4.0;
 
             // SHOOTING
             if player.reload_timer.update_and_check(deltatime) {
@@ -3196,7 +3324,7 @@ impl Scene for SceneStage {
                 collected = true;
             }
             match collectible.collectible {
-                CollectibleType::Ammo(_) => {
+                CollectibleType::Ammo => {
                     // Follower collectibles
                     let canvas_rect =
                         Rect::from_width_height(globals.canvas_width, globals.canvas_height);
@@ -3256,7 +3384,7 @@ impl Scene for SceneStage {
                     infotext_create_buffer.push(InfoText::new(text_pos, text, collectible.color));
 
                     match collectible.collectible {
-                        CollectibleType::Boost(_) => {
+                        CollectibleType::Boost => {
                             // Inner
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(
@@ -3304,7 +3432,7 @@ impl Scene for SceneStage {
                                 ),
                             );
                         }
-                        CollectibleType::Ammo(_) => {
+                        CollectibleType::Ammo => {
                             self.commands.add_entity(Archetypes::new_hit_effect(
                                 xform.pos,
                                 collectible.size,
@@ -3317,7 +3445,7 @@ impl Scene for SceneStage {
                                 true,
                             ));
                         }
-                        CollectibleType::Hp(_) => {
+                        CollectibleType::Hp => {
                             // Inner vertical
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(
@@ -3382,7 +3510,7 @@ impl Scene for SceneStage {
                                 ),
                             );
                         }
-                        CollectibleType::Skillpoints(_) => {
+                        CollectibleType::Skillpoint => {
                             // Inner
                             let entity = self.world.reserve_entity();
                             self.commands.add_component_bundle(
