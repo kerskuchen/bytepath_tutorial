@@ -48,7 +48,7 @@ const COLOR_NEGATIVE_BOOST: Color =
 const COLOR_NEGATIVE_HP: Color =
     Color::from_rgb(1.0 - 241.0 / 255.0, 1.0 - 103.0 / 255.0, 1.0 - 69.0 / 255.0);
 const COLOR_NEGATIVE_SKILL_POINT: Color =
-    Color::from_rgb(255.0 / 255.0, 198.0 / 255.0, 93.0 / 255.0);
+    Color::from_rgb(1.0 - 255.0 / 255.0, 1.0 - 198.0 / 255.0, 1.0 - 93.0 / 255.0);
 
 const COLORS: [Color; 5] = [
     COLOR_DEFAULT,
@@ -348,7 +348,6 @@ impl AutoremoveTimerFrames {
 #[derive(Debug, Copy, Clone)]
 struct Player {
     pub attack: Attack,
-    pub timer_tick: TriggerRepeating,
     pub timer_trail_particles: TriggerRepeating,
 
     pub ship_type: ShipType,
@@ -378,6 +377,9 @@ struct Player {
     pub boost_allowed: bool,
     pub boost_cooldown_time: f32,
     pub boost_cooldown_timer: TimerSimple,
+
+    pub cycle_cooldown: f32,
+    pub cycle_timer: TimerSimple,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -846,36 +848,37 @@ impl Archetypes {
             },
             Player {
                 attack: attack,
-                timer_tick: TriggerRepeating::new(5.0),
                 timer_trail_particles: TriggerRepeating::new(0.01),
                 ship_type,
-
                 speed: 0.0,
 
                 speed_max: 100.0,
+
                 speed_base_max: 100.0,
                 acc: 100.0,
                 turn_speed: 1.66 * 180.0,
-
                 width: player_size,
 
                 height: player_size,
+
                 reload_timer: TriggerRepeating::new(attack.reload_time),
-
                 hp: PLAYER_MAX_HP,
-                hp_max: PLAYER_MAX_HP,
 
+                hp_max: PLAYER_MAX_HP,
                 invincible_timer: TimerSimple::new_stopped(2.0),
 
                 ammo: PLAYER_MAX_AMMO,
 
                 ammo_max: PLAYER_MAX_AMMO,
+
                 boost: PLAYER_MAX_BOOST,
                 boost_max: PLAYER_MAX_BOOST,
                 boost_allowed: true,
                 boost_cooldown_time: 2.0,
-
                 boost_cooldown_timer: TimerSimple::new_stopped(1.0),
+
+                cycle_timer: TimerSimple::new_started(5.0),
+                cycle_cooldown: 5.0,
             },
             Collider {
                 radius: player_size,
@@ -2174,14 +2177,36 @@ impl Scene for SceneStage {
             ADDITIVITY_NONE,
         );
 
-        let (player_hp, player_boost, player_ammo) =
-            if let Some(player) = self.world.get::<Player>(self.player).ok() {
-                (player.hp, player.boost, player.ammo)
-            } else {
-                (0.0, 0.0, 0.0)
-            };
+        // Skillpoints
+        draw.draw_text(
+            &format!("{} SP", self.skillpoint_count),
+            &self.fonts["gui_font"],
+            1.0,
+            Vec2::new(20.0, 10.0),
+            Vec2::zero(),
+            Some(TextAlignment {
+                x: AlignmentHorizontal::Left,
+                y: AlignmentVertical::Top,
+                origin_is_baseline: false,
+                ignore_whitespace: false,
+            }),
+            None,
+            DEPTH_GUI,
+            COLOR_SKILL_POINT,
+            ADDITIVITY_NONE,
+        );
 
-        let cycle_percentage = self.director.timer_round.completion_ratio();
+        let (player_hp, player_boost, player_ammo, player_cycle_percentage) =
+            if let Some(player) = self.world.get::<Player>(self.player).ok() {
+                (
+                    player.hp,
+                    player.boost,
+                    player.ammo,
+                    player.cycle_timer.completion_ratio(),
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
 
         fn draw_bar(
             draw: &mut Drawstate,
@@ -2271,7 +2296,7 @@ impl Scene for SceneStage {
             "AMMO",
             &format!("{}/{}", roundi(player_ammo), roundi(PLAYER_MAX_AMMO)),
             COLOR_AMMO,
-            Vec2::new(globals.canvas_width / 2.0 - (bar_width + 2.0), 16.0),
+            Vec2::new(globals.canvas_width / 2.0 - (bar_width / 2.0 + 4.0), 16.0),
             bar_width,
             bar_height,
             player_ammo / PLAYER_MAX_AMMO,
@@ -2283,7 +2308,7 @@ impl Scene for SceneStage {
             "BOOST",
             &format!("{}/{}", roundi(player_boost), roundi(PLAYER_MAX_BOOST)),
             COLOR_BOOST,
-            Vec2::new(globals.canvas_width / 2.0 + (bar_width + 2.0), 16.0),
+            Vec2::new(globals.canvas_width / 2.0 + (bar_width / 2.0 + 4.0), 16.0),
             bar_width,
             bar_height,
             player_boost / PLAYER_MAX_BOOST,
@@ -2296,7 +2321,7 @@ impl Scene for SceneStage {
             &format!("{}/{}", roundi(player_hp), roundi(PLAYER_MAX_HP)),
             COLOR_HP,
             Vec2::new(
-                globals.canvas_width / 2.0 - (bar_width + 2.0),
+                globals.canvas_width / 2.0 - (bar_width / 2.0 + 4.0),
                 globals.canvas_height - 16.0,
             ),
             bar_width,
@@ -2311,12 +2336,26 @@ impl Scene for SceneStage {
             &self.director.difficulty.to_string(),
             COLOR_DEFAULT,
             Vec2::new(
-                globals.canvas_width / 2.0 + (bar_width + 2.0),
+                globals.canvas_width / 2.0 + (bar_width / 2.0 + 4.0),
                 globals.canvas_height - 16.0,
             ),
             bar_width,
             bar_height,
-            cycle_percentage,
+            player_cycle_percentage,
+            false,
+        );
+
+        let round_percentage = self.director.timer_round.completion_ratio();
+        draw_bar(
+            draw,
+            &self.fonts["gui_font"],
+            "DIFFICULTY",
+            &self.director.difficulty.to_string(),
+            COLOR_NEGATIVE_AMMO,
+            Vec2::new(bar_width, globals.canvas_height - 16.0),
+            bar_width,
+            bar_height,
+            round_percentage,
             false,
         );
 
@@ -2986,7 +3025,8 @@ impl Scene for SceneStage {
             }
 
             // TICK EFFECT
-            if player.timer_tick.update_and_check(deltatime) {
+            if player.cycle_timer.update_and_check_if_triggered(deltatime) {
+                player.cycle_timer = TimerSimple::new_started(player.cycle_cooldown);
                 self.commands
                     .add_entity(Archetypes::new_tick_effect(player_entity));
             }
