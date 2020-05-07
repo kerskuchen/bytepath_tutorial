@@ -753,7 +753,7 @@ fn draw_drawable(
                 };
                 let linestrip: Vec<Vec2> =
                     linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
-                draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
+                draw.draw_linestrip_bresenham(&linestrip, false, depth, color, additivity);
             }
         }
         MeshType::Linestrip(linestrip_raw) => {
@@ -764,7 +764,7 @@ fn draw_drawable(
             };
             let linestrip: Vec<Vec2> =
                 linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
-            draw.draw_linestrip_bresenham(&linestrip, depth, color, additivity);
+            draw.draw_linestrip_bresenham(&linestrip, false, depth, color, additivity);
         }
         MeshType::LineWithThickness {
             length,
