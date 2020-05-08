@@ -206,6 +206,40 @@ impl GameStateInterface for GameState {
             _ => panic!("Unknown scene '{}'", self.scene_current),
         }
 
+        /*
+        draw.draw_rect(
+            Rect::from_width_height(self.globals.canvas_width, self.globals.canvas_height),
+            true,
+            DEPTH_DEBUG,
+            Color::greyscale(0.5),
+            ADDITIVITY_NONE,
+        );
+        draw.draw_rect_transformed(
+            (40, 40).into(),
+            false,
+            false,
+            Vec2::zero(),
+            (10, 30).into(),
+            Vec2::ones(),
+            Vec2::from_angle_flipped_y(deg_to_rad(45.0)),
+            DEPTH_DEBUG,
+            Color::red() * 0.5,
+            ADDITIVITY_NONE,
+        );
+        draw.draw_rect_transformed(
+            (40, 40).into(),
+            false,
+            false,
+            Vec2::zero(),
+            (40, 25).into(),
+            Vec2::ones(),
+            Vec2::from_angle_flipped_y(deg_to_rad(0.0)),
+            DEPTH_DEBUG,
+            Color::red() * 0.5,
+            ADDITIVITY_NONE,
+        );
+        */
+
         let deltatime = self.globals.deltatime;
         self.globals.camera.update(deltatime);
         draw.set_shaderparams_simple(Color::white(), self.globals.camera.proj_view_matrix());
