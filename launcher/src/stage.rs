@@ -642,6 +642,7 @@ enum MeshType {
     },
     Linestrips(Vec<Vec<(i32, i32)>>),
     Linestrip(Vec<Vec2>),
+    Polygon(Vec<Vec2>),
     Text {
         text: String,
         font_name: String,
@@ -681,7 +682,8 @@ fn draw_drawable(
 
     let pos = xform.pos;
     let scale = drawable.scale;
-    let dir = Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle + drawable.dir_angle_offset));
+    let rotation_dir =
+        Vec2::from_angle_flipped_y(deg_to_rad(xform.dir_angle + drawable.dir_angle_offset));
     let pivot = drawable.pos_offset;
     let depth = drawable.depth;
     let color = drawable.color;
@@ -689,10 +691,10 @@ fn draw_drawable(
     match &drawable.mesh {
         MeshType::Circle { radius, filled } => {
             if drawable.add_jitter {
-                todo!();
+                unimplemented!();
             }
             if scale.x != scale.y {
-                todo!();
+                unimplemented!();
             }
             if *filled {
                 draw.draw_circle_filled(xform.pos, scale.x * *radius, depth, color, additivity);
@@ -707,7 +709,7 @@ fn draw_drawable(
             centered,
         } => {
             if drawable.add_jitter {
-                todo!();
+                unimplemented!();
             }
 
             let rect = if *centered {
@@ -728,7 +730,7 @@ fn draw_drawable(
             centered,
         } => {
             if drawable.add_jitter {
-                todo!();
+                unimplemented!();
             }
 
             draw.draw_rect_transformed(
@@ -738,7 +740,7 @@ fn draw_drawable(
                 pivot,
                 pos,
                 scale,
-                dir,
+                rotation_dir,
                 depth,
                 color,
                 additivity,
@@ -751,8 +753,14 @@ fn draw_drawable(
                 } else {
                     None
                 };
-                let linestrip: Vec<Vec2> =
-                    linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
+                let linestrip: Vec<Vec2> = linestrip_transform_jittered(
+                    linestrip_raw,
+                    pos,
+                    pivot,
+                    scale,
+                    rotation_dir,
+                    jitter,
+                );
                 draw.draw_linestrip_bresenham(&linestrip, false, depth, color, additivity);
             }
         }
@@ -762,9 +770,31 @@ fn draw_drawable(
             } else {
                 None
             };
-            let linestrip: Vec<Vec2> =
-                linestrip_transform(linestrip_raw, pos, pivot, scale, dir, jitter);
+            let linestrip: Vec<Vec2> = linestrip_transform_jittered(
+                linestrip_raw,
+                pos,
+                pivot,
+                scale,
+                rotation_dir,
+                jitter,
+            );
             draw.draw_linestrip_bresenham(&linestrip, false, depth, color, additivity);
+        }
+        MeshType::Polygon(vertices) => {
+            if drawable.add_jitter {
+                unimplemented!();
+            }
+
+            draw.draw_polygon(
+                vertices,
+                pivot,
+                pos,
+                scale,
+                rotation_dir,
+                depth,
+                color,
+                additivity,
+            );
         }
         MeshType::LineWithThickness {
             length,
@@ -774,11 +804,11 @@ fn draw_drawable(
         } => {
             let (start, end) = if *centered {
                 (
-                    xform.pos - 0.5 * *length * dir,
-                    xform.pos + 0.5 * *length * dir,
+                    xform.pos - 0.5 * *length * rotation_dir,
+                    xform.pos + 0.5 * *length * rotation_dir,
                 )
             } else {
-                (xform.pos, xform.pos + *length * dir)
+                (xform.pos, xform.pos + *length * rotation_dir)
             };
 
             draw.draw_line_with_thickness(
@@ -817,31 +847,24 @@ fn draw_drawable(
     };
 }
 
-fn linestrip_transform<CoordType>(
+fn linestrip_transform_jittered<CoordType>(
     linestrip: &[CoordType],
     pos: Vec2,
     pivot: Vec2,
     scale: Vec2,
-    dir: Vec2,
+    rotation_dir: Vec2,
     jitter: Option<&mut Random>,
 ) -> Vec<Vec2>
 where
     CoordType: Into<Vec2> + Copy + Clone,
 {
+    let mut result = Vec2::multiple_transformed(linestrip, pos, pivot, scale, rotation_dir);
     if let Some(random) = jitter {
-        linestrip
-            .iter()
-            .map(|&point| {
-                random.vec2_in_unit_rect()
-                    + Vec2::from(point.into()).transformed(pivot, pos, scale, dir)
-            })
-            .collect()
-    } else {
-        linestrip
-            .iter()
-            .map(|&point| Vec2::from(point.into()).transformed(pivot, pos, scale, dir))
-            .collect()
+        for point in result.iter_mut() {
+            *point += random.vec2_in_unit_rect();
+        }
     }
+    result
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1091,6 +1114,7 @@ impl Archetypes {
         size: f32,
         lifetime: f32,
         color: Color,
+        depth: Depth,
     ) -> (Transform, AutoremoveTimer, TweenScale, Drawable) {
         (
             Transform {
@@ -1107,7 +1131,7 @@ impl Archetypes {
                 pos_offset: Vec2::zero(),
                 dir_angle_offset: 0.0,
                 scale: Vec2::filled(size),
-                depth: DEPTH_EFFECTS,
+                depth,
                 color,
                 additivity: ADDITIVITY_NONE,
                 add_jitter: false,
@@ -1219,23 +1243,38 @@ impl Archetypes {
                 collisions: Vec::with_capacity(32),
             },
             DrawableMulti {
-                drawables: vec![Drawable {
-                    mesh: MeshType::RectangleTransformed {
-                        width: 1.2 * size,
-                        height: 1.2 * size,
-
-                        filled: true,
-                        centered: true,
+                drawables: vec![
+                    Drawable {
+                        mesh: MeshType::Polygon(vec![
+                            Vec2::new(size, 0.0),
+                            Vec2::new(0.0, size),
+                            Vec2::new(0.0, -size),
+                        ]),
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        add_jitter: false,
+                        depth: DEPTH_PROJECTILE,
+                        color,
+                        additivity: ADDITIVITY_NONE,
+                        visible: true,
                     },
-                    pos_offset: Vec2::zero(),
-                    dir_angle_offset: 45.0,
-                    scale: Vec2::ones(),
-                    add_jitter: false,
-                    depth: DEPTH_PROJECTILE,
-                    color,
-                    additivity: ADDITIVITY_NONE,
-                    visible: true,
-                }],
+                    Drawable {
+                        mesh: MeshType::Polygon(vec![
+                            Vec2::new(-size, 0.0),
+                            Vec2::new(0.0, size),
+                            Vec2::new(0.0, -size),
+                        ]),
+                        pos_offset: Vec2::zero(),
+                        dir_angle_offset: 0.0,
+                        scale: Vec2::ones(),
+                        add_jitter: false,
+                        depth: DEPTH_PROJECTILE,
+                        color: COLOR_DEFAULT,
+                        additivity: ADDITIVITY_NONE,
+                        visible: true,
+                    },
+                ],
             },
         )
     }
@@ -3042,7 +3081,7 @@ impl Scene for SceneStage {
                 player.ammo -= player.attack.ammo_consumption_on_shot;
 
                 // Add muzzleflash
-                let shoot_points_relative: Vec<Vec2> = linestrip_transform(
+                let shoot_points_relative: Vec<Vec2> = linestrip_transform_jittered(
                     &get_shoot_points_for_ship(player.ship_type),
                     Vec2::zero(),
                     Vec2::zero(),
@@ -3058,7 +3097,7 @@ impl Scene for SceneStage {
                 ));
 
                 // Add projectile(s)
-                let shoot_points: Vec<Vec2> = linestrip_transform(
+                let shoot_points: Vec<Vec2> = linestrip_transform_jittered(
                     &get_shoot_points_for_ship(player.ship_type),
                     player_pos,
                     Vec2::zero(),
@@ -3206,7 +3245,7 @@ impl Scene for SceneStage {
 
             // EXHAUST PARTICLES
             if player.timer_trail_particles.update_and_check(deltatime) {
-                let exhaust_points: Vec<Vec2> = linestrip_transform(
+                let exhaust_points: Vec<Vec2> = linestrip_transform_jittered(
                     &get_exhaust_points_for_ship(player.ship_type),
                     player_pos,
                     Vec2::zero(),
@@ -3224,8 +3263,13 @@ impl Scene for SceneStage {
                         COLOR_SKILL_POINT
                     };
 
-                    self.commands
-                        .add_entity(Archetypes::new_trailparticle(point, size, lifetime, color));
+                    self.commands.add_entity(Archetypes::new_trailparticle(
+                        point,
+                        size,
+                        lifetime,
+                        color,
+                        DEPTH_EFFECTS,
+                    ));
                 }
             }
 
@@ -3389,11 +3433,15 @@ impl Scene for SceneStage {
 
             // Trail
             if projectile.timer_trail_particles.update_and_check(deltatime) {
-                let size = globals.random.f32_in_range_closed(1.0, 3.0);
+                let size = globals.random.f32_in_range_closed(1.0, projectile.size);
                 let lifetime = globals.random.f32_in_range_closed(0.05, 0.15);
                 let color = projectile.color;
                 self.commands.add_entity(Archetypes::new_trailparticle(
-                    xform.pos, size, lifetime, color,
+                    xform.pos,
+                    size,
+                    lifetime,
+                    color,
+                    DEPTH_PROJECTILE - 1.0,
                 ));
             }
 
