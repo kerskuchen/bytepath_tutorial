@@ -358,6 +358,51 @@ impl AutoremoveTimerFrames {
 // Primary Components
 
 #[derive(Debug, Copy, Clone)]
+pub struct PickupAction {
+    collectible_type: CollectibleType,
+    action: OneTimeAction,
+    chance: i32,
+}
+impl PickupAction {
+    fn to_string(self) -> String {
+        format!(
+            "{} percent chance to {} on {} pickup",
+            self.chance,
+            self.action.to_string(),
+            self.collectible_type.to_string()
+        )
+    }
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum OneTimeAction {
+    RegainHp,
+    LaunchHomingProjectile,
+}
+impl OneTimeAction {
+    fn to_string(self) -> String {
+        match self {
+            OneTimeAction::RegainHp => "Regain Hp".to_string(),
+            OneTimeAction::LaunchHomingProjectile => "Launch Homing Projectile".to_string(),
+        }
+    }
+
+    fn get_infotext_string(self) -> String {
+        match self {
+            OneTimeAction::RegainHp => "Hp Regain!".to_string(),
+            OneTimeAction::LaunchHomingProjectile => "Homing Projectile!".to_string(),
+        }
+    }
+
+    fn get_infotext_color(self) -> Color {
+        match self {
+            OneTimeAction::RegainHp => COLOR_HP,
+            OneTimeAction::LaunchHomingProjectile => COLOR_DEFAULT,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum Skill {
     AddPercentageHP(i32),
     AddPercentageAmmo(i32),
@@ -368,6 +413,7 @@ pub enum Skill {
     AddHpGain(i32),
     AddAmmoGain(i32),
     AddBoostGain(i32),
+    PickupAction(PickupAction),
 }
 
 impl Skill {
@@ -382,6 +428,11 @@ impl Skill {
             Skill::AddHpGain(_) => "HP Gain".to_string(),
             Skill::AddAmmoGain(_) => "Ammo Gain".to_string(),
             Skill::AddBoostGain(_) => "Boost Gain".to_string(),
+            Skill::PickupAction(action) => format!(
+                "{} on {} pickup",
+                action.action.to_string(),
+                action.collectible_type.to_string()
+            ),
         }
     }
     pub fn description(&self) -> String {
@@ -395,11 +446,16 @@ impl Skill {
             Skill::AddHpGain(value) => format!("+{} HP Gain", value),
             Skill::AddAmmoGain(value) => format!("+{} Ammo Gain", value),
             Skill::AddBoostGain(value) => format!("+{} Boost Gain", value),
+            Skill::PickupAction(action) => format!(
+                "{} on {} pickup",
+                action.action.to_string(),
+                action.collectible_type.to_string()
+            ),
         }
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 struct Player {
     pub attack: Attack,
     pub timer_trail_particles: TriggerRepeating,
@@ -437,10 +493,37 @@ struct Player {
 
     pub cycle_cooldown: f32,
     pub cycle_timer: TimerSimple,
+
+    action_on_pickup_chances: Vec<PickupAction>,
 }
 
 impl Player {
     fn new(size: f32, ship_type: ShipType, skills: &[Skill]) -> Player {
+        let action_on_pickup_chances = {
+            let mut pairs_percentages = HashMap::new();
+            for skill in skills {
+                match skill {
+                    Skill::PickupAction(action) => {
+                        let entry = pairs_percentages
+                            .entry((action.collectible_type, action.action))
+                            .or_insert(0);
+                        *entry += action.chance;
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut result = Vec::new();
+            for ((collectible_type, action), chance) in pairs_percentages {
+                result.push(PickupAction {
+                    collectible_type,
+                    action,
+                    chance,
+                });
+            }
+            result
+        };
+
         let (hp, hp_gain, ammo, ammo_gain, boost, boost_gain) = {
             let mut gain_hp = PLAYER_BASE_GAIN_HP;
             let mut gain_ammo = PLAYER_BASE_GAIN_AMMO;
@@ -480,6 +563,7 @@ impl Player {
                     Skill::AddBoostGain(value) => {
                         gain_boost += *value as f32;
                     }
+                    _ => {}
                 }
             }
 
@@ -493,7 +577,7 @@ impl Player {
             )
         };
 
-        let attack = ATTACKS[&AttackType::Homing];
+        let attack = ATTACKS[&AttackType::Neutral];
         Player {
             attack,
             timer_trail_particles: TriggerRepeating::new(0.01),
@@ -529,7 +613,25 @@ impl Player {
             boost_cooldown_timer: TimerSimple::new_stopped(1.0),
             cycle_cooldown: 5.0,
             cycle_timer: TimerSimple::new_started(5.0),
+
+            action_on_pickup_chances,
         }
+    }
+
+    fn add_hp(&mut self) {
+        self.hp = clampf(self.hp + self.hp_gain, 0.0, self.hp_max);
+    }
+
+    fn add_boost(&mut self) {
+        self.boost = clampf(self.boost + self.boost_gain, 0.0, self.boost_max);
+        if self.boost > self.boost_max / 2.0 {
+            self.boost_allowed = true;
+            self.boost_cooldown_timer.stop();
+        }
+    }
+
+    fn add_ammo(&mut self) {
+        self.ammo = clampf(self.ammo + self.ammo_gain, 0.0, self.ammo_max);
     }
 }
 
@@ -546,7 +648,7 @@ struct Enemy {
     score: usize,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 enum CollectibleType {
     Boost,
     Ammo,
@@ -555,6 +657,16 @@ enum CollectibleType {
     Attack(AttackType),
 }
 impl CollectibleType {
+    fn to_string(self) -> String {
+        match self {
+            CollectibleType::Boost => "Boost".to_string(),
+            CollectibleType::Ammo => "Ammo".to_string(),
+            CollectibleType::Hp => "Hp".to_string(),
+            CollectibleType::Skillpoint => "Skillpoint".to_string(),
+            CollectibleType::Attack(_) => "Attack".to_string(),
+        }
+    }
+
     fn get_infotext_string(&self) -> &'static str {
         match self {
             CollectibleType::Boost => "+BOOST",
@@ -2330,7 +2442,20 @@ impl SceneStage {
     ) -> SceneStage {
         let mut world = World::new();
 
-        let skills = vec![Skill::AddHp(15), Skill::AddPercentageBoost(50)];
+        let skills = vec![
+            Skill::AddHp(15),
+            Skill::AddPercentageBoost(50),
+            Skill::PickupAction(PickupAction {
+                collectible_type: CollectibleType::Ammo,
+                action: OneTimeAction::LaunchHomingProjectile,
+                chance: 5,
+            }),
+            Skill::PickupAction(PickupAction {
+                collectible_type: CollectibleType::Ammo,
+                action: OneTimeAction::RegainHp,
+                chance: 5,
+            }),
+        ];
         let player_pos = Vec2::new(globals.canvas_width, globals.canvas_height) / 2.0;
         let player = world.spawn(Archetypes::new_player(
             player_pos,
@@ -2375,6 +2500,8 @@ impl Scene for SceneStage {
         let deltatime = self
             .slowmotion
             .update_and_get_new_deltatime(globals.deltatime);
+
+        let mut infotext_create_buffer: Vec<InfoText> = Vec::new();
 
         //------------------------------------------------------------------------------------------
         // DRAW GUI
@@ -2992,21 +3119,15 @@ impl Scene for SceneStage {
                     match collectible.collectible {
                         CollectibleType::Boost => {
                             self.score += 150;
-                            player.boost =
-                                clampf(player.boost + player.boost_gain, 0.0, player.boost_max);
-                            if player.boost > player.boost_max / 2.0 {
-                                player.boost_allowed = true;
-                                player.boost_cooldown_timer.stop();
-                            }
+                            player.add_boost();
                         }
                         CollectibleType::Ammo => {
                             self.score += 50;
-                            player.ammo =
-                                clampf(player.ammo + player.ammo_gain, 0.0, player.ammo_max);
+                            player.add_ammo();
                         }
                         CollectibleType::Hp => {
                             self.score += 100;
-                            player.hp = clampf(player.hp + player.hp_gain, 0.0, player.hp_max);
+                            player.add_hp();
                         }
                         CollectibleType::Skillpoint => {
                             self.score += 250;
@@ -3019,7 +3140,39 @@ impl Scene for SceneStage {
                             player.reload_timer = TriggerRepeating::new(player.attack.reload_time);
                         }
                     }
+
+                    for pickup_action in &player.action_on_pickup_chances {
+                        if pickup_action.collectible_type == collectible.collectible
+                            && globals.random.gen_bool(pickup_action.chance as f64 / 100.0)
+                        {
+                            match pickup_action.action {
+                                OneTimeAction::RegainHp => {
+                                    // TODO: The borrowchecker does not let us call player.add_hp() here :(
+                                    player.hp =
+                                        clampf(player.hp + player.hp_gain, 0.0, player.hp_max);
+                                }
+                                OneTimeAction::LaunchHomingProjectile => {
+                                    self.commands.add_entity(Archetypes::new_projectile_homing(
+                                        player_xform.pos,
+                                        globals.random.vec2_in_unit_circle(),
+                                        200.0,
+                                        4.0,
+                                        COLOR_SKILL_POINT,
+                                        100.0,
+                                    ))
+                                }
+                            }
+                            // Create infotext
+                            let text_pos = globals
+                                .random
+                                .vec2_in_disk(player_xform.pos, collider.radius);
+                            let text = &pickup_action.action.get_infotext_string();
+                            let text_color = pickup_action.action.get_infotext_color();
+                            infotext_create_buffer.push(InfoText::new(text_pos, text, text_color));
+                        }
+                    }
                 }
+
                 if let Some(_enemy) = self.world.get::<Enemy>(collision_entity).ok() {
                     if !player.invincible_timer.is_running() {
                         player_damage += 30.0;
@@ -3473,8 +3626,6 @@ impl Scene for SceneStage {
 
         //------------------------------------------------------------------------------------------
         // UPDATE COLLECTIBLES
-
-        let mut infotext_create_buffer: Vec<InfoText> = Vec::new();
 
         for (entity, (xform, motion, collectible, collider)) in
             &mut self
