@@ -1,3 +1,5 @@
+// Stopped at "Haste Area" in https://github.com/adnzzzzZ/blog/issues/25
+
 use ct_lib::audio::*;
 use ct_lib::draw::*;
 use ct_lib::game::*;
